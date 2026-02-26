@@ -2,6 +2,40 @@
 
 The spike classifier trains faster on an NVIDIA GPU. `monitor.sh train --remote` handles data transfer and model retrieval automatically — you run one command on the Pi and it does the rest.
 
+## Windows requirement: WSL2
+
+The transfer script uses `scp` and `mkdir` over SSH, and the remote training script uses Unix paths (`/tmp/`). These require a Linux shell on the PC side. **WSL2 must be configured as the default SSH shell on your Windows machine** — once that's done, everything else works as documented.
+
+### One-time WSL2 setup — on the PC
+
+**1. Install WSL2 with Ubuntu** (in PowerShell as Administrator):
+```powershell
+wsl --install
+# Reboot when prompted, then complete Ubuntu first-run setup
+```
+
+**2. Enable the OpenSSH Server** (in PowerShell as Administrator):
+```powershell
+Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0
+Set-Service -Name sshd -StartupType Automatic
+Start-Service sshd
+```
+
+**3. Set WSL2 bash as the default SSH shell** (in PowerShell as Administrator):
+```powershell
+New-ItemProperty -Path "HKLM:\SOFTWARE\OpenSSH" `
+  -Name DefaultShell `
+  -Value "C:\Windows\System32\bash.exe" `
+  -PropertyType String -Force
+```
+
+**4. Install Python dependencies inside WSL2** (open the Ubuntu app or run `wsl`):
+```bash
+pip3 install xgboost pandas numpy
+```
+
+After this, SSH connections from the Pi will land in a Linux bash session inside WSL2, and all the Linux commands (`mkdir`, `python3`, `/tmp/` paths) work normally.
+
 ## How it works
 
 The Pi prepares training data locally, ships it to the PC over Tailscale SSH, the PC trains with CUDA and writes the model, then the Pi retrieves it. No persistent service runs on the PC.
@@ -33,12 +67,12 @@ Pi                                  PC (via Tailscale SSH)
 
 ### Step 1 — On the PC: install Python dependencies
 
+**Windows (in WSL2 — open the Ubuntu app or run `wsl` in a terminal):**
 ```bash
-pip install xgboost pandas numpy
+pip3 install xgboost pandas numpy
 ```
 
 XGBoost v2.0+ bundles its own CUDA runtime — no separate CUDA toolkit install needed. Verify it works:
-
 ```bash
 python3 -c "import xgboost as xgb; print(xgb.__version__)"
 ```

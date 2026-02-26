@@ -355,10 +355,10 @@ with open("/tmp/tcgplayer_train/features.json", "w") as f:
 print(f"Extracted {len(rows)} training rows")
 PYEOF
 
-        ssh "${remote_host}" "mkdir -p ${REMOTE_TMP}/lib"
-        rsync -az "${PRICING_DIR}/lib/" "${remote_host}:${REMOTE_TMP}/lib/"
-        rsync -az "${PRICING_DIR}/scripts/train_remote.py" "${remote_host}:${REMOTE_TMP}/"
-        rsync -az "/tmp/tcgplayer_train/features.json" "${remote_host}:${REMOTE_TMP}/"
+        ssh "${remote_host}" "mkdir -p ${REMOTE_TMP}"
+        scp -r "${PRICING_DIR}/lib" "${remote_host}:${REMOTE_TMP}/"
+        scp "${PRICING_DIR}/scripts/train_remote.py" "${remote_host}:${REMOTE_TMP}/"
+        scp "/tmp/tcgplayer_train/features.json" "${remote_host}:${REMOTE_TMP}/"
 
         ssh "${remote_host}" "cd ${REMOTE_TMP} && python3 train_remote.py \
             --features ${REMOTE_TMP}/features.json \
@@ -371,7 +371,7 @@ PYEOF
         fi
 
         mkdir -p "${MODELS_DIR}"
-        rsync -az "${remote_host}:${REMOTE_TMP}/spike_classifier.json" "${MODELS_DIR}/"
+        scp "${remote_host}:${REMOTE_TMP}/spike_classifier.json" "${MODELS_DIR}/"
         echo "✅ Model retrieved from ${remote_host}"
     fi
 }
