@@ -1,74 +1,95 @@
 # Remote GPU Training Setup
 
-The spike classifier trains faster on an NVIDIA GPU. `monitor.sh train --remote` handles the data transfer and model retrieval automatically over your Tailscale network — the PC just needs to be awake and reachable.
+The spike classifier trains faster on an NVIDIA GPU. `monitor.sh train --remote` handles data transfer and model retrieval automatically — you run one command on the Pi and it does the rest.
 
-## What happens under the hood
+## How it works
+
+The Pi prepares training data locally, ships it to the PC over Tailscale SSH, the PC trains with CUDA and writes the model, then the Pi retrieves it. No persistent service runs on the PC.
 
 ```
 Pi                                  PC (via Tailscale SSH)
 ────────────────────────            ──────────────────────────
-Extract features from cache
-  → /tmp/tcgplayer_train/
-    features.json
+1. Extract features from
+   MTGJson cache
+   → /tmp/tcgplayer_train/
+     features.json
 
-rsync lib/ + train_remote.py ─────→ /tmp/tcgplayer_train/
-rsync features.json ──────────────→ /tmp/tcgplayer_train/
+2. rsync lib/ + train_remote.py ──→ /tmp/tcgplayer_train/
+   rsync features.json ───────────→ /tmp/tcgplayer_train/
 
-ssh: python3 train_remote.py ─────→ XGBoost trains (device=cuda)
+3. ssh: python3 train_remote.py ──→ XGBoost trains (device=cuda)
                                       → spike_classifier.json
 
-rsync model back ←────────────────  /tmp/tcgplayer_train/
+4. rsync model back ←─────────────  /tmp/tcgplayer_train/
                                       spike_classifier.json
-models/spike_classifier.json saved
+
+5. Save to models/
+   spike_classifier.json
 ```
 
-No persistent service runs on the PC. It only does work when you explicitly run `train --remote`.
+---
 
-## PC setup (one-time)
+## One-time setup
 
-### 1. Install Python dependencies
+### Step 1 — On the PC: install Python dependencies
 
 ```bash
 pip install xgboost pandas numpy
 ```
 
-CUDA toolkit does not need to be installed separately — XGBoost bundles its own CUDA runtime as of v2.0.
+XGBoost v2.0+ bundles its own CUDA runtime — no separate CUDA toolkit install needed. Verify it works:
 
-Verify GPU is detected:
 ```bash
 python3 -c "import xgboost as xgb; print(xgb.__version__)"
-# Should print without error
 ```
 
-### 2. Verify Tailscale connectivity
+### Step 2 — On the Pi: verify Tailscale connectivity
 
-From the Pi, confirm you can reach the PC:
 ```bash
 tailscale ping <pc-hostname>
 ```
 
-### 3. Set up SSH key authentication
+Replace `<pc-hostname>` with the Tailscale machine name for your PC (visible in the Tailscale admin panel or `tailscale status`).
 
-Remote training uses SSH without a password prompt. If you haven't already:
+### Step 3 — On the Pi: set up SSH key authentication
+
+Remote training SSHes into the PC without a password prompt. Run these commands **on the Pi**:
 
 ```bash
-# On the Pi — generate a key if needed
+# Generate a key (skip if you already have one at ~/.ssh/id_ed25519)
 ssh-keygen -t ed25519 -C "pi-tcgplayer"
 
-# Copy it to the PC (replace <user> and <pc-hostname>)
+# Authorise the Pi's key on the PC (you'll be prompted for your PC password once)
 ssh-copy-id <user>@<pc-hostname>
 
-# Test it
-ssh <user>@<pc-hostname> echo "ok"
+# Confirm passwordless login works
+ssh <user>@<pc-hostname> echo "connection ok"
 ```
 
-### 4. Run a training job
+Replace `<user>` with your PC login username and `<pc-hostname>` with the Tailscale hostname from Step 2.
+
+---
+
+## Running a training job
+
+Everything from here runs **on the Pi**.
+
+### First run (if you haven't synced MTGJson data yet)
 
 ```bash
-bash scripts/monitor.sh train --remote <pc-tailscale-hostname>
+bash scripts/monitor.sh sync
+```
+
+This downloads MTGJson data and builds your inventory cache (~15 minutes, ~650MB).
+
+### Train on the PC's GPU
+
+```bash
+bash scripts/monitor.sh train --remote <user>@<pc-hostname>
 ```
 
 Expected output:
+
 ```
 Training remotely on <hostname> (GPU)...
 Extracted 1842 training rows
@@ -77,44 +98,53 @@ Training on 1842 examples with device=cuda ...
 ✅ Model retrieved from <hostname>
 ```
 
+The trained model is saved to `models/spike_classifier.json` on the Pi. The next `predict` run will use it automatically.
+
+---
+
 ## Retraining
 
-Retrain whenever you've accumulated more price history (monthly is plenty):
+Retrain monthly as your price history grows. Run **on the Pi**:
 
 ```bash
-bash scripts/monitor.sh sync    # optional: refresh MTGJson data first
-bash scripts/monitor.sh train --remote <hostname>
+bash scripts/monitor.sh sync                          # optional: refresh MTGJson data
+bash scripts/monitor.sh train --remote <user>@<pc-hostname>
 ```
 
-The new model overwrites `models/spike_classifier.json`. If training fails, the previous model is left in place.
+The new model overwrites the previous one. If training fails for any reason, the existing model is left in place.
+
+---
 
 ## Fallback behaviour
 
 | Condition | What happens |
 |---|---|
-| PC unreachable | Falls back to local CPU training with a warning |
-| `models/` has no model | `predict` auto-trains locally before scoring |
-| Training data too sparse | `predict` skips spike scoring, runs forecast only |
+| PC unreachable over Tailscale | Falls back to local CPU training on the Pi with a warning |
+| `models/spike_classifier.json` missing | `predict` auto-trains locally (CPU) before scoring |
+| Training data too sparse | `predict` skips spike scoring, still runs price forecasts |
+
+---
 
 ## Troubleshooting
 
 **SSH asks for a password**
-Set up key authentication (Step 3 above).
+Key authentication isn't set up. Follow Step 3 above.
 
 **`xgboost` not found on PC**
+Run on the PC:
 ```bash
 pip install xgboost
 ```
 
 **`device=cuda` error on PC**
-Your XGBoost version may be older than 2.0. Update it:
+XGBoost is older than v2.0. Update it on the PC:
 ```bash
 pip install --upgrade xgboost
 ```
 
-**Features file is empty**
-Run `sync` first to build the MTGJson inventory cache, then `train`:
+**"Features file is empty" error**
+The MTGJson cache hasn't been built yet. Run on the Pi:
 ```bash
 bash scripts/monitor.sh sync
-bash scripts/monitor.sh train --remote <hostname>
+bash scripts/monitor.sh train --remote <user>@<pc-hostname>
 ```
