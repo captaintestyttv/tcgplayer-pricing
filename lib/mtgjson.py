@@ -44,23 +44,32 @@ def read_inventory_ids(history_dir: str) -> set[str]:
     return ids
 
 
+def build_sku_to_uuid(skus_data: dict) -> dict:
+    """Build skuId -> uuid mapping from TcgplayerSkus data."""
+    mapping = {}
+    for uuid, skus in skus_data.items():
+        for sku in skus:
+            sku_id = sku.get("skuId")
+            if sku_id:
+                mapping[str(sku_id)] = uuid
+    return mapping
+
+
 def build_inventory_cache(
     inventory_ids: set[str],
     identifiers_data: dict,
     prices_data: dict,
+    sku_to_uuid: dict,
 ) -> dict:
     """Build lean cache from MTGJson data scoped to inventory IDs."""
-    tcg_to_card = {}
-    for uuid, card in identifiers_data.items():
-        tcg_id = card.get("identifiers", {}).get("tcgplayerProductId")
-        if tcg_id:
-            tcg_to_card[tcg_id] = (uuid, card)
-
     cache = {}
-    for tcg_id in inventory_ids:
-        if tcg_id not in tcg_to_card:
+    for sku_id in inventory_ids:
+        uuid = sku_to_uuid.get(sku_id)
+        if not uuid:
             continue
-        uuid, card = tcg_to_card[tcg_id]
+        card = identifiers_data.get(uuid)
+        if not card:
+            continue
 
         price_history = {}
         try:
@@ -69,7 +78,7 @@ def build_inventory_cache(
         except (KeyError, TypeError):
             pass
 
-        cache[tcg_id] = {
+        cache[sku_id] = {
             "uuid": uuid,
             "name": card.get("name", ""),
             "rarity": card.get("rarity", ""),
@@ -97,9 +106,11 @@ def sync(history_dir: str, data_dir: str) -> None:
 
     identifiers_path = os.path.join(data_dir, "AllIdentifiers.json")
     prices_path = os.path.join(data_dir, "AllPrices.json")
+    skus_path = os.path.join(data_dir, "TcgplayerSkus.json")
 
     download_json(f"{MTGJSON_BASE}/AllIdentifiers.json", identifiers_path)
     download_json(f"{MTGJSON_BASE}/AllPrices.json", prices_path)
+    download_json(f"{MTGJSON_BASE}/TcgplayerSkus.json", skus_path)
 
     print("Building inventory cache...")
     inventory_ids = read_inventory_ids(history_dir)
@@ -109,8 +120,10 @@ def sync(history_dir: str, data_dir: str) -> None:
 
     identifiers_data = load_json_file(identifiers_path)["data"]
     prices_data = load_json_file(prices_path)["data"]
+    skus_data = load_json_file(skus_path)["data"]
+    sku_to_uuid = build_sku_to_uuid(skus_data)
 
-    cache = build_inventory_cache(inventory_ids, identifiers_data, prices_data)
+    cache = build_inventory_cache(inventory_ids, identifiers_data, prices_data, sku_to_uuid)
     cache_path = os.path.join(data_dir, CACHE_FILENAME)
     with open(cache_path, "w") as f:
         json.dump(cache, f, indent=2)
