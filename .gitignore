@@ -1,0 +1,5 @@
+# Analysis output (regenerated on each run)
+output/
+
+# Raw exports (may contain personal inventory data)
+tcgplayer-exports/
