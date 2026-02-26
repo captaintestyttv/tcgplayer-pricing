@@ -3,3 +3,6 @@ output/
 
 # Raw exports (may contain personal inventory data)
 tcgplayer-exports/
+
+# Git worktrees
+.worktrees/
