@@ -336,7 +336,6 @@ train_model() {
     local remote_host="${1:-}"
 
     if [[ -z "$remote_host" ]]; then
-        echo "Training locally (CPU)..."
         python3 - <<PYEOF
 import sys, json
 sys.path.insert(0, "${PRICING_DIR}")
@@ -344,6 +343,15 @@ from lib.mtgjson import load_inventory_cache
 from lib.features import generate_training_data
 from lib.spike import train
 import os
+
+try:
+    import xgboost as xgb
+    xgb.train({"device": "cuda", "tree_method": "hist"}, xgb.DMatrix([[0]], label=[0]), num_boost_round=1)
+    device = "cuda"
+except Exception:
+    device = "cpu"
+
+print(f"Training locally ({device.upper()})...")
 
 cache = load_inventory_cache("${DATA_DIR}")
 if not cache:
@@ -356,7 +364,7 @@ if not rows:
     sys.exit(1)
 
 os.makedirs("${MODELS_DIR}", exist_ok=True)
-train(rows, "${MODELS_DIR}/spike_classifier.json", device="cpu")
+train(rows, "${MODELS_DIR}/spike_classifier.json", device=device)
 PYEOF
     else
         echo "Training remotely on ${remote_host} (GPU)..."
