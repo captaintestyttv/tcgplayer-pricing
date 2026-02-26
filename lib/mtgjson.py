@@ -11,8 +11,11 @@ MTGJSON_BASE = "https://mtgjson.com/api/v5"
 CACHE_FILENAME = "inventory_cards.json"
 
 
-def download_json(url: str, dest_path: str) -> None:
+def download_json(url: str, dest_path: str, force: bool = False) -> None:
     """Download a (possibly gzip-compressed) JSON file."""
+    if not force and os.path.exists(dest_path):
+        print(f"  -> {os.path.basename(dest_path)} already exists, skipping")
+        return
     print(f"Downloading {url} ...")
     response = requests.get(url, stream=True, timeout=120)
     response.raise_for_status()
@@ -100,17 +103,47 @@ def load_inventory_cache(data_dir: str) -> dict:
         return json.load(f)
 
 
-def sync(history_dir: str, data_dir: str) -> None:
-    """Download MTGJson data and build inventory_cards.json."""
+def sync(
+    history_dir: str,
+    data_dir: str,
+    force: bool = False,
+    cache_only: bool = False,
+    files: list[str] | None = None,
+) -> None:
+    """Download MTGJson data and build inventory_cards.json.
+
+    flags:
+      force      -- re-download even if files already exist
+      cache_only -- skip all downloads, just rebuild the cache
+      files      -- list of filenames to (re-)download, e.g. ["AllPrices.json"]
+                    overrides force; other files are skipped if they exist
+    """
     os.makedirs(data_dir, exist_ok=True)
 
     identifiers_path = os.path.join(data_dir, "AllIdentifiers.json")
     prices_path = os.path.join(data_dir, "AllPrices.json")
     skus_path = os.path.join(data_dir, "TcgplayerSkus.json")
 
-    download_json(f"{MTGJSON_BASE}/AllIdentifiers.json", identifiers_path)
-    download_json(f"{MTGJSON_BASE}/AllPrices.json", prices_path)
-    download_json(f"{MTGJSON_BASE}/TcgplayerSkus.json", skus_path)
+    if not cache_only:
+        # Determine per-file force flag
+        def should_force(filename: str) -> bool:
+            if files is not None:
+                return filename in files
+            return force
+
+        download_json(f"{MTGJSON_BASE}/AllIdentifiers.json", identifiers_path,
+                      force=should_force("AllIdentifiers.json"))
+        download_json(f"{MTGJSON_BASE}/AllPrices.json", prices_path,
+                      force=should_force("AllPrices.json"))
+        download_json(f"{MTGJSON_BASE}/TcgplayerSkus.json", skus_path,
+                      force=should_force("TcgplayerSkus.json"))
+
+    for path, label in [(identifiers_path, "AllIdentifiers.json"),
+                        (prices_path, "AllPrices.json"),
+                        (skus_path, "TcgplayerSkus.json")]:
+        if not os.path.exists(path):
+            print(f"Error: {label} not found. Run sync without --cache to download it.")
+            sys.exit(1)
 
     print("Building inventory cache...")
     inventory_ids = read_inventory_ids(history_dir)

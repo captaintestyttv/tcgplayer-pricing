@@ -7,7 +7,12 @@
 #   monitor.sh analyze                # Analyze changes vs history
 #   monitor.sh report                 # Generate pricing recommendations
 #   monitor.sh baseline               # Set current as baseline
-#   monitor.sh sync                        # Download MTGJson data
+#   monitor.sh sync                        # Download missing MTGJson files + rebuild cache
+#   monitor.sh sync --force                # Re-download all files + rebuild cache
+#   monitor.sh sync --cache                # Rebuild cache only (no downloads)
+#   monitor.sh sync --prices               # Re-download AllPrices.json only
+#   monitor.sh sync --identifiers          # Re-download AllIdentifiers.json only
+#   monitor.sh sync --skus                 # Re-download TcgplayerSkus.json only
 #   monitor.sh train [--remote <host>]     # Train spike classifier
 #   monitor.sh predict                     # Run predictions + recommendations
 # =============================================================================
@@ -300,11 +305,27 @@ PYEOF
 # Sync MTGJson data
 # =============================================================================
 sync_data() {
+    local force=False
+    local cache_only=False
+    local files=None
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --force)       force=True ;;
+            --cache)       cache_only=True ;;
+            --prices)      files="['AllPrices.json']" ;;
+            --identifiers) files="['AllIdentifiers.json']" ;;
+            --skus)        files="['TcgplayerSkus.json']" ;;
+            *) echo "Unknown sync option: $1"; exit 1 ;;
+        esac
+        shift
+    done
+
     python3 - <<PYEOF
 import sys
 sys.path.insert(0, "${PRICING_DIR}")
 from lib.mtgjson import sync
-sync("${HISTORY_DIR}", "${DATA_DIR}")
+sync("${HISTORY_DIR}", "${DATA_DIR}", force=${force}, cache_only=${cache_only}, files=${files})
 PYEOF
 }
 
@@ -411,7 +432,7 @@ case "${1:-}" in
         cp "${HISTORY_DIR}/latest.csv" "${HISTORY_DIR}/baseline.csv" 2>/dev/null || echo "No data to set as baseline"
         ;;
     sync)
-        sync_data
+        sync_data "${@:2}"
         ;;
     train)
         if [[ "${2:-}" == "--remote" ]]; then
