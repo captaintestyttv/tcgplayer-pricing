@@ -6,3 +6,7 @@ tcgplayer-exports/
 
 # Git worktrees
 .worktrees/
+
+data/mtgjson/AllPrices.json
+data/mtgjson/AllIdentifiers.json
+models/
