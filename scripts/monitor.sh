@@ -7,12 +7,17 @@
 #   monitor.sh analyze                # Analyze changes vs history
 #   monitor.sh report                 # Generate pricing recommendations
 #   monitor.sh baseline               # Set current as baseline
+#   monitor.sh sync                        # Download MTGJson data
+#   monitor.sh train [--remote <host>]     # Train spike classifier
+#   monitor.sh predict                     # Run predictions + recommendations
 # =============================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PRICING_DIR="/home/cap/.openclaw/workspace/projects/tcgplayer-pricing"
 HISTORY_DIR="${PRICING_DIR}/history"
 OUTPUT_DIR="${PRICING_DIR}/output"
+DATA_DIR="${PRICING_DIR}/data/mtgjson"
+MODELS_DIR="${PRICING_DIR}/models"
 
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
 
@@ -292,6 +297,103 @@ PYEOF
 }
 
 # =============================================================================
+# Sync MTGJson data
+# =============================================================================
+sync_data() {
+    python3 - <<PYEOF
+import sys
+sys.path.insert(0, "${PRICING_DIR}")
+from lib.mtgjson import sync
+sync("${HISTORY_DIR}", "${DATA_DIR}")
+PYEOF
+}
+
+# =============================================================================
+# Train spike classifier
+# =============================================================================
+train_model() {
+    local remote_host="${1:-}"
+
+    if [[ -z "$remote_host" ]]; then
+        echo "Training locally (CPU)..."
+        python3 - <<PYEOF
+import sys, json
+sys.path.insert(0, "${PRICING_DIR}")
+from lib.mtgjson import load_inventory_cache
+from lib.features import generate_training_data
+from lib.spike import train
+import os
+
+cache = load_inventory_cache("${DATA_DIR}")
+if not cache:
+    print("No MTGJson cache found. Run 'monitor.sh sync' first.")
+    sys.exit(1)
+
+rows = generate_training_data(cache)
+if not rows:
+    print("Insufficient price history for training.")
+    sys.exit(1)
+
+os.makedirs("${MODELS_DIR}", exist_ok=True)
+train(rows, "${MODELS_DIR}/spike_classifier.json", device="cpu")
+PYEOF
+    else
+        echo "Training remotely on ${remote_host} (GPU)..."
+        REMOTE_TMP="/tmp/tcgplayer_train"
+
+        python3 - <<PYEOF
+import sys, json, os
+sys.path.insert(0, "${PRICING_DIR}")
+from lib.mtgjson import load_inventory_cache
+from lib.features import generate_training_data
+
+cache = load_inventory_cache("${DATA_DIR}")
+rows = generate_training_data(cache)
+os.makedirs("/tmp/tcgplayer_train", exist_ok=True)
+with open("/tmp/tcgplayer_train/features.json", "w") as f:
+    json.dump(rows, f)
+print(f"Extracted {len(rows)} training rows")
+PYEOF
+
+        ssh "${remote_host}" "mkdir -p ${REMOTE_TMP}/lib"
+        rsync -az "${PRICING_DIR}/lib/" "${remote_host}:${REMOTE_TMP}/lib/"
+        rsync -az "${PRICING_DIR}/scripts/train_remote.py" "${remote_host}:${REMOTE_TMP}/"
+        rsync -az "/tmp/tcgplayer_train/features.json" "${remote_host}:${REMOTE_TMP}/"
+
+        ssh "${remote_host}" "cd ${REMOTE_TMP} && python3 train_remote.py \
+            --features ${REMOTE_TMP}/features.json \
+            --output ${REMOTE_TMP}/spike_classifier.json"
+
+        if [[ $? -ne 0 ]]; then
+            echo "⚠️  Remote training failed. Falling back to local CPU..."
+            train_model
+            return
+        fi
+
+        mkdir -p "${MODELS_DIR}"
+        rsync -az "${remote_host}:${REMOTE_TMP}/spike_classifier.json" "${MODELS_DIR}/"
+        echo "✅ Model retrieved from ${remote_host}"
+    fi
+}
+
+# =============================================================================
+# Run predictions
+# =============================================================================
+run_predict() {
+    python3 - <<PYEOF
+import sys
+sys.path.insert(0, "${PRICING_DIR}")
+from lib.predict import run_predict
+run_predict(
+    history_dir="${HISTORY_DIR}",
+    data_dir="${DATA_DIR}",
+    models_dir="${MODELS_DIR}",
+    output_dir="${OUTPUT_DIR}",
+)
+PYEOF
+}
+
+# =============================================================================
 # Main
 # =============================================================================
 case "${1:-}" in
@@ -308,15 +410,31 @@ case "${1:-}" in
         echo "Baseline set at $TIMESTAMP"
         cp "${HISTORY_DIR}/latest.csv" "${HISTORY_DIR}/baseline.csv" 2>/dev/null || echo "No data to set as baseline"
         ;;
+    sync)
+        sync_data
+        ;;
+    train)
+        if [[ "${2:-}" == "--remote" ]]; then
+            train_model "${3:-}"
+        else
+            train_model
+        fi
+        ;;
+    predict)
+        run_predict
+        ;;
     *)
         echo "TCGPlayer Price Monitor"
         echo ""
         echo "Usage: $0 <command> [args]"
         echo ""
         echo "Commands:"
-        echo "  import <file.csv>   Import new price export"
-        echo "  analyze             Analyze changes vs history"
-        echo "  report              Generate pricing recommendations"
-        echo "  baseline            Set current data as baseline for comparison"
+        echo "  import <file.csv>          Import new price export"
+        echo "  analyze                    Analyze changes vs history"
+        echo "  report                     Generate pricing recommendations"
+        echo "  baseline                   Set current data as baseline"
+        echo "  sync                       Download MTGJson data"
+        echo "  train [--remote <host>]    Train spike classifier"
+        echo "  predict                    Run predictions + recommendations"
         ;;
 esac
