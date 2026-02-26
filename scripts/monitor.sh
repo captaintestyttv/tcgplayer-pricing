@@ -13,7 +13,7 @@
 # =============================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PRICING_DIR="/home/cap/.openclaw/workspace/projects/tcgplayer-pricing"
+PRICING_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 HISTORY_DIR="${PRICING_DIR}/history"
 OUTPUT_DIR="${PRICING_DIR}/output"
 DATA_DIR="${PRICING_DIR}/data/mtgjson"
@@ -63,14 +63,14 @@ analyze_changes() {
     echo ""
     echo "=== Price Analysis ==="
     
-    python3 << 'PYEOF'
+    python3 << PYEOF
 import csv
 import os
 import json
 from datetime import datetime
 
-HISTORY_DIR = "/home/cap/.openclaw/workspace/projects/tcgplayer-pricing/history"
-OUTPUT_DIR = "/home/cap/.openclaw/workspace/projects/tcgplayer-pricing/output"
+HISTORY_DIR = "${HISTORY_DIR}"
+OUTPUT_DIR = "${OUTPUT_DIR}"
 
 # Find all history files
 files = sorted([f for f in os.listdir(HISTORY_DIR) if f.startswith('export-') and f.endswith('.csv')])
@@ -178,14 +178,14 @@ generate_recommendations() {
     echo ""
     echo "=== Pricing Recommendations ==="
     
-    python3 << 'PYEOF'
+    python3 << PYEOF
 import csv
 import json
 import os
 from datetime import datetime
 
-HISTORY_DIR = "/home/cap/.openclaw/workspace/projects/tcgplayer-pricing/history"
-OUTPUT_DIR = "/home/cap/.openclaw/workspace/projects/tcgplayer-pricing/output"
+HISTORY_DIR = "${HISTORY_DIR}"
+OUTPUT_DIR = "${OUTPUT_DIR}"
 
 # Find history files
 files = sorted([f for f in os.listdir(HISTORY_DIR) if f.startswith('export-') and f.endswith('.csv')])
