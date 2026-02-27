@@ -4,12 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-This is a TCGPlayer price monitoring tool for Magic: The Gathering card inventory. It imports TCGPlayer CSV exports, tracks price history, and generates pricing recommendations.
+TCGPlayer price monitoring and predictive pricing tool for Magic: The Gathering card inventory. It imports TCGPlayer CSV exports, tracks price history, generates pricing recommendations, and uses machine learning (XGBoost) to predict price spikes.
 
 ## Commands
 
 ```bash
-# Import a new TCGPlayer export
+# Import a new TCGPlayer export (auto-runs analysis)
 bash scripts/monitor.sh import tcgplayer-exports/<file>.csv
 
 # Analyze price changes between last two exports
@@ -20,39 +20,119 @@ bash scripts/monitor.sh report
 
 # Set current data as baseline
 bash scripts/monitor.sh baseline
+
+# Download/refresh MTGJson data and rebuild inventory cache
+bash scripts/monitor.sh sync                # download missing files + rebuild cache
+bash scripts/monitor.sh sync --force        # re-download all files + rebuild cache
+bash scripts/monitor.sh sync --cache        # rebuild cache only (no downloads)
+bash scripts/monitor.sh sync --prices       # re-download AllPrices.json only
+bash scripts/monitor.sh sync --identifiers  # re-download AllIdentifiers.json only
+bash scripts/monitor.sh sync --skus         # re-download TcgplayerSkus.json only
+
+# Train the spike classifier model
+bash scripts/monitor.sh train               # local (auto-detects CPU/CUDA)
+bash scripts/monitor.sh train --remote <host>  # remote GPU via SSH
+
+# Run full predictive pipeline (forecast + spike detection + recommendations)
+bash scripts/monitor.sh predict
 ```
+
+## Running Tests
+
+```bash
+# Run the full test suite (29 tests)
+python3 -m pytest tests/ -v
+
+# Run a single test file
+python3 -m pytest tests/test_features.py -v
+```
+
+Dependencies: `pip install -r requirements.txt` (pandas, numpy, scikit-learn, xgboost, requests, pytest)
 
 ## Architecture
 
-Single bash script (`scripts/monitor.sh`) with embedded Python heredocs for data processing:
+Entry point is `scripts/monitor.sh` (bash with embedded Python heredocs). The predictive pricing pipeline lives in `lib/` as standalone Python modules.
 
-- **`import`** — copies the CSV to `history/export-<timestamp>.csv` and `history/latest.csv`, then runs analysis automatically
-- **`analyze`** — Python compares the two most recent history exports; saves `output/analysis-latest.json`
-- **`report`** — Python reads the latest export, applies fee math, and saves a `output/price-adjustments-<timestamp>.csv` ready for review
-
-### Directory layout
+### Directory Layout
 
 | Path | Purpose |
 |---|---|
+| `scripts/monitor.sh` | Main CLI — all commands route through here |
+| `scripts/train_remote.py` | Entry point for remote GPU training jobs |
+| `lib/` | Python modules for predictive pricing pipeline |
+| `lib/mtgjson.py` | MTGJson download, caching, and inventory builder |
+| `lib/features.py` | Feature extraction + spike labeling for training |
+| `lib/forecast.py` | Per-card linear regression price forecasting |
+| `lib/spike.py` | XGBoost spike classifier (train + score) |
+| `lib/predict.py` | Prediction orchestration — ties everything together |
+| `tests/` | pytest test suite (29 tests across 5 files) |
+| `tests/fixtures/` | Test fixture data (inventory_cards.json) |
+| `docs/plans/` | Design docs and implementation plans |
 | `history/` | Timestamped export archives + `latest.csv` + `baseline.csv` |
-| `output/` | Generated analysis JSON and price-adjustment CSVs |
-| `tcgplayer-exports/` | Drop zone for raw TCGPlayer downloads |
+| `output/` | Generated CSVs and analysis JSON (gitignored) |
+| `data/mtgjson/` | Cached MTGJson files (~650MB, gitignored) |
+| `models/` | Trained model files (gitignored) |
+| `tcgplayer-exports/` | Drop zone for raw TCGPlayer downloads (gitignored) |
 
-### Fee constants (encoded in the script)
+### Data Pipeline
+
+1. **Import** — TCGPlayer CSV exports go into `history/` with timestamps
+2. **Sync** — Downloads MTGJson files (AllPrices.json, AllIdentifiers.json, TcgplayerSkus.json), builds `inventory_cards.json` cache joining card metadata with price history scoped to the user's inventory
+3. **Train** — Generates training data via 31-day sliding windows, labels spikes (>20% increase in 30 days), trains XGBoost classifier
+4. **Predict** — Runs forecasting + spike scoring + fee-based margin calc, outputs `predictions-*.csv` and `watchlist-*.csv`
+
+### Python Modules
+
+**`lib/features.py`** — Extracts 8 features per card: `rarity_rank`, `num_printings`, `set_age_days`, `formats_legal_count`, `price_momentum_7d`, `price_volatility_30d`, `current_price`, `tcgplayer_id`. Spike threshold: >20% price increase in 30 days.
+
+**`lib/forecast.py`** — Linear regression on last 90 days of price history. Requires minimum 14 days of data. Returns 7-day and 30-day price predictions plus trend direction (up/down/flat with 3% threshold). Floor at $0.01.
+
+**`lib/spike.py`** — XGBoost classifier (200 estimators, max_depth=4, learning_rate=0.1). Uses 7 features (all except `tcgplayer_id` and `spike` label). Outputs probability 0–1. Supports CPU and CUDA devices. Model saved as `.json`.
+
+**`lib/predict.py`** — Orchestrates the full pipeline. Loads latest.csv + inventory cache, auto-trains if model missing, scores all cards, applies pricing rules. Spike probability >= 0.6 triggers HOLD signal. Outputs 13-column predictions CSV and filtered watchlist CSV.
+
+**`lib/mtgjson.py`** — Downloads and caches MTGJson bulk files. Builds SKU-to-UUID mapping from TcgplayerSkus.json to match TCGPlayer inventory IDs to card UUIDs in AllIdentifiers.json. Streams large JSON files to manage memory.
+
+### Fee Constants
 
 | Variable | Value | Meaning |
 |---|---|---|
 | `COMMISSION_FEE` | 10.75% | TCGPlayer seller commission |
 | `TRANSACTION_FEE` | 2.5% | Payment processing percentage |
 | `TRANSACTION_FLAT` | $0.30 | Payment processing flat fee |
-| `SHIPPING_REVENUE` | $1.31 | Shipping charged to buyer |
+| `SHIPPING_REVENUE` | $1.31 | Shipping charged to buyer (cards < $5) |
 | `POSTAGE_STANDARD` | $0.73 | Actual postage for cards < $5 |
 
-Cards ≥ $5 use no shipping revenue and $1.50 postage (media mail assumed).
+Cards >= $5 use no shipping revenue and $1.50 postage (media mail assumed).
 
-### Pricing recommendation logic
+### Pricing Recommendation Logic
 
 - Net margin < $0.10 → RAISE
 - Market > current listing by 10%+ → RAISE
 - Market < current listing by 10%+ → LOWER
+- Competitive adjustment for high-value cards (>= $5, current < 95% of market) → RAISE
 - Suggested price = `market * 0.98` for RAISE, `market` for LOWER
+
+### Predictive Signals
+
+- `HOLD` — Spike probability >= 0.6 (card likely to increase, don't lower price)
+- `SELL_NOW` — Downtrend + price near market (sell before further decline)
+- Predictions CSV includes: Predicted 7d, Predicted 30d, Trend, Spike Probability, Signal
+
+### Degradation Behavior
+
+The system degrades gracefully when components are unavailable:
+
+- No MTGJson cache → pricing-only output, no predictions
+- Missing model → auto-trains before predict
+- Insufficient price history (<14 days) → skips forecast, uses metadata features only
+- Remote GPU unreachable → falls back to local CPU training
+
+## Conventions
+
+- **Bash + Python hybrid**: `monitor.sh` uses heredocs (`<<PYEOF`) for inline Python. The `lib/` modules are standard Python imported via `sys.path.insert`.
+- **Path handling**: All paths derive from `SCRIPT_DIR`/`PRICING_DIR` — no hardcoded absolute paths.
+- **Timestamps**: `YYYYMMDD-HHMMSS` format for filenames.
+- **Card IDs**: Column is `TCGplayer Id` (string). Matching to MTGJson uses SKU-to-UUID mapping via TcgplayerSkus.json.
+- **Testing**: pytest with temporary directories for isolation. Fixtures in `tests/fixtures/`. Each module has its own test file.
+- **Output CSVs**: Written to `output/` with timestamped filenames. The `output/` directory is gitignored and created on demand.
