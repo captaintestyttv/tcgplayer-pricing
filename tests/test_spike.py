@@ -41,3 +41,22 @@ def test_train_raises_on_empty_rows(tmp_path):
     model_path = str(tmp_path / "model.json")
     with pytest.raises(ValueError, match="No training data"):
         train([], model_path, device="cpu")
+
+
+def test_train_creates_metadata_file(cards, tmp_path):
+    from lib.spike import load_model_meta
+    model_path = str(tmp_path / "model.json")
+    rows = generate_training_data(cards)
+    train(rows, model_path, device="cpu")
+    meta = load_model_meta(model_path)
+    assert meta is not None
+    assert meta["num_samples"] == len(rows)
+    assert meta["device"] == "cpu"
+    assert "trained_at" in meta
+    assert "hyperparameters" in meta
+    assert "spike_rate" in meta
+
+
+def test_load_model_meta_returns_none_when_missing(tmp_path):
+    from lib.spike import load_model_meta
+    assert load_model_meta(str(tmp_path / "nonexistent.json")) is None

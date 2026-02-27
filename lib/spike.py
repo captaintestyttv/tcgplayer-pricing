@@ -1,5 +1,13 @@
+import json
+import os
+from datetime import datetime
+
 import pandas as pd
 import xgboost as xgb
+
+from lib.config import N_ESTIMATORS, MAX_DEPTH, LEARNING_RATE, get_logger
+
+log = get_logger(__name__)
 
 FEATURE_COLS = [
     "rarity_rank",
@@ -23,14 +31,43 @@ def train(rows: list[dict], model_path: str, device: str = "cpu") -> None:
 
     model = xgb.XGBClassifier(
         device=device,
-        n_estimators=200,
-        max_depth=4,
-        learning_rate=0.1,
+        n_estimators=N_ESTIMATORS,
+        max_depth=MAX_DEPTH,
+        learning_rate=LEARNING_RATE,
         eval_metric="logloss",
         verbosity=0,
     )
     model.fit(X, y)
     model.save_model(model_path)
+
+    meta = {
+        "trained_at": datetime.now().isoformat(),
+        "num_samples": len(rows),
+        "device": device,
+        "hyperparameters": {
+            "n_estimators": N_ESTIMATORS,
+            "max_depth": MAX_DEPTH,
+            "learning_rate": LEARNING_RATE,
+        },
+        "spike_rate": float(y.mean()),
+    }
+    meta_path = model_path.replace(".json", "_meta.json")
+    with open(meta_path, "w") as f:
+        json.dump(meta, f, indent=2)
+
+    log.info(
+        "Model saved to %s (%d samples, device=%s, spike_rate=%.3f)",
+        model_path, len(rows), device, meta["spike_rate"],
+    )
+
+
+def load_model_meta(model_path: str) -> dict | None:
+    """Load model metadata if available."""
+    meta_path = model_path.replace(".json", "_meta.json")
+    if not os.path.exists(meta_path):
+        return None
+    with open(meta_path) as f:
+        return json.load(f)
 
 
 def score(features: list[dict], model_path: str) -> list[float]:

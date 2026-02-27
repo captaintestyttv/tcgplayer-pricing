@@ -3,26 +3,49 @@ import gzip
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 import requests
+
+from lib.config import (
+    DOWNLOAD_TIMEOUT, DOWNLOAD_MAX_RETRIES, DOWNLOAD_BACKOFF_BASE, get_logger,
+)
+
+log = get_logger(__name__)
 
 MTGJSON_BASE = "https://mtgjson.com/api/v5"
 CACHE_FILENAME = "inventory_cards.json"
 
 
 def download_json(url: str, dest_path: str, force: bool = False) -> None:
-    """Download a (possibly gzip-compressed) JSON file."""
+    """Download a JSON file with retry and atomic write."""
     if not force and os.path.exists(dest_path):
         print(f"  -> {os.path.basename(dest_path)} already exists, skipping")
         return
-    print(f"Downloading {url} ...")
-    response = requests.get(url, stream=True, timeout=120)
-    response.raise_for_status()
-    with open(dest_path, "wb") as f:
-        for chunk in response.iter_content(chunk_size=1024 * 1024):
-            f.write(chunk)
-    print(f"  -> saved to {dest_path}")
+
+    tmp_path = dest_path + ".tmp"
+    for attempt in range(1, DOWNLOAD_MAX_RETRIES + 1):
+        try:
+            print(f"Downloading {url} ...")
+            response = requests.get(url, stream=True, timeout=DOWNLOAD_TIMEOUT)
+            response.raise_for_status()
+            with open(tmp_path, "wb") as f:
+                for chunk in response.iter_content(chunk_size=1024 * 1024):
+                    f.write(chunk)
+            os.rename(tmp_path, dest_path)
+            print(f"  -> saved to {dest_path}")
+            return
+        except (requests.RequestException, OSError) as exc:
+            log.warning("Download attempt %d/%d failed: %s", attempt, DOWNLOAD_MAX_RETRIES, exc)
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+            if attempt < DOWNLOAD_MAX_RETRIES:
+                delay = DOWNLOAD_BACKOFF_BASE ** attempt
+                print(f"  Retrying in {delay}s...")
+                time.sleep(delay)
+            else:
+                raise
 
 
 def load_json_file(path: str) -> dict:
@@ -79,7 +102,7 @@ def build_inventory_cache(
             normal = prices_data[uuid]["paper"]["tcgplayer"]["retail"]["normal"]
             price_history = {k: float(v) for k, v in normal.items()}
         except (KeyError, TypeError):
-            pass
+            log.debug("No TCGPlayer retail prices for sku %s (uuid %s)", sku_id, uuid)
 
         cache[sku_id] = {
             "uuid": uuid,

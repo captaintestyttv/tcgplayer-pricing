@@ -43,3 +43,28 @@ def test_forecast_never_below_minimum(cards):
     tiny_history = {f"2026-02-{i:02d}": max(0.01, 1.0 - i * 0.05) for i in range(1, 20)}
     result = forecast_card(tiny_history, days_ahead=30)
     assert result is None or result >= 0.01
+
+
+def test_forecast_exactly_14_days_boundary():
+    history = {f"2026-01-{i:02d}": 1.0 + i * 0.01 for i in range(1, 15)}
+    assert len(history) == 14
+    result = forecast_card(history, days_ahead=7)
+    assert result is not None
+    assert isinstance(result, float)
+
+
+def test_forecast_13_days_returns_none():
+    history = {f"2026-01-{i:02d}": 1.0 for i in range(1, 14)}
+    assert len(history) == 13
+    assert forecast_card(history, days_ahead=7) is None
+
+
+def test_forecast_empty_history():
+    assert forecast_card({}, days_ahead=7) is None
+
+
+def test_trend_direction_with_zero_start():
+    """trend_direction should not crash when first price is 0."""
+    history = {f"2026-01-{i:02d}": 0.0 if i == 1 else 1.0 for i in range(1, 10)}
+    result = trend_direction(history)
+    assert result in ("up", "down", "flat")

@@ -1,8 +1,9 @@
 import numpy as np
 from datetime import datetime
 
-RARITY_RANK = {"common": 0, "uncommon": 1, "rare": 2, "mythic": 3}
-SPIKE_THRESHOLD = 0.20  # >20% in 30 days = spike
+from lib.config import RARITY_RANK, SPIKE_THRESHOLD, MIN_PRICE, get_logger
+
+log = get_logger(__name__)
 
 
 def extract_features(tcgplayer_id: str, card: dict) -> dict:
@@ -13,7 +14,7 @@ def extract_features(tcgplayer_id: str, card: dict) -> dict:
     current_price = price_vals[-1] if price_vals else 0.0
 
     if len(price_vals) >= 7 and price_vals[-7] > 0:
-        momentum_7d = (price_vals[-1] - price_vals[-7]) / price_vals[-7]
+        momentum_7d = (price_vals[-1] - price_vals[-7]) / max(price_vals[-7], MIN_PRICE)
     else:
         momentum_7d = 0.0
 
@@ -47,6 +48,7 @@ def generate_training_data(cards: dict) -> list[dict]:
         price_vals = [float(v) for _, v in prices]
 
         if len(price_vals) < 31:
+            log.debug("Skipping %s: only %d days of history", tcgplayer_id, len(price_vals))
             continue
 
         for i in range(len(price_vals) - 30):
@@ -61,4 +63,5 @@ def generate_training_data(cards: dict) -> list[dict]:
             feat["spike"] = spike
             rows.append(feat)
 
+    log.info("Generated %d training rows from %d cards", len(rows), len(cards))
     return rows

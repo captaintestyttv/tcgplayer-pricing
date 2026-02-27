@@ -1,8 +1,7 @@
 import numpy as np
 from sklearn.linear_model import LinearRegression
 
-MIN_HISTORY_DAYS = 14
-MIN_PRICE = 0.01
+from lib.config import MIN_HISTORY_DAYS, MAX_HISTORY_DAYS, MIN_PRICE, TREND_THRESHOLD
 
 
 def forecast_card(price_history: dict, days_ahead: int = 7) -> float | None:
@@ -13,8 +12,7 @@ def forecast_card(price_history: dict, days_ahead: int = 7) -> float | None:
     if len(price_vals) < MIN_HISTORY_DAYS:
         return None
 
-    # Use last 90 days at most
-    price_vals = price_vals[-90:]
+    price_vals = price_vals[-MAX_HISTORY_DAYS:]
     x = np.arange(len(price_vals)).reshape(-1, 1)
 
     model = LinearRegression()
@@ -36,8 +34,8 @@ def trend_direction(price_history: dict) -> str:
     recent = price_vals[-7:]
     slope = (recent[-1] - recent[0]) / max(recent[0], MIN_PRICE)
 
-    if slope > 0.03:
+    if slope > TREND_THRESHOLD:
         return "up"
-    if slope < -0.03:
+    if slope < -TREND_THRESHOLD:
         return "down"
     return "flat"

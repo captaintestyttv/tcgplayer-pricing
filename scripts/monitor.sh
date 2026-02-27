@@ -15,6 +15,7 @@
 #   monitor.sh sync --skus                 # Re-download TcgplayerSkus.json only
 #   monitor.sh train [--remote <host>]     # Train spike classifier
 #   monitor.sh predict                     # Run predictions + recommendations
+#   monitor.sh predict --dry-run           # Preview predictions without writing files
 # =============================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -47,7 +48,26 @@ import_data() {
         echo "Error: File not found: $input_file"
         return 1
     fi
-    
+
+    # Validate CSV has required columns
+    python3 - "$input_file" <<'PYEOF'
+import csv, sys
+required = ["TCGplayer Id", "Product Name", "TCG Market Price", "TCG Marketplace Price", "Total Quantity"]
+with open(sys.argv[1], newline="") as f:
+    reader = csv.DictReader(f)
+    if reader.fieldnames is None:
+        print("Error: CSV file is empty or has no header row."); sys.exit(1)
+    missing = [c for c in required if c not in reader.fieldnames]
+    if missing:
+        print(f"Error: CSV is missing required columns: {', '.join(missing)}"); sys.exit(1)
+    first_row = next(reader, None)
+    if first_row is None:
+        print("Error: CSV has a header but no data rows."); sys.exit(1)
+PYEOF
+    if [[ $? -ne 0 ]]; then
+        return 1
+    fi
+
     # Copy to history with timestamp
     cp "$input_file" "${HISTORY_DIR}/export-${TIMESTAMP}.csv"
     
@@ -401,7 +421,9 @@ PYEOF
 
         mkdir -p "${MODELS_DIR}"
         scp "${remote_host}:${REMOTE_TMP}/spike_classifier.json" "${MODELS_DIR}/"
+        scp "${remote_host}:${REMOTE_TMP}/spike_classifier_meta.json" "${MODELS_DIR}/" 2>/dev/null
         echo "✅ Model retrieved from ${remote_host}"
+        rm -rf /tmp/tcgplayer_train
     fi
 }
 
@@ -409,7 +431,8 @@ PYEOF
 # Run predictions
 # =============================================================================
 run_predict() {
-    python3 - <<PYEOF
+    local dry_run="${1:-}"
+    python3 - "$dry_run" <<PYEOF
 import sys
 sys.path.insert(0, "${PRICING_DIR}")
 from lib.predict import run_predict
@@ -418,6 +441,7 @@ run_predict(
     data_dir="${DATA_DIR}",
     models_dir="${MODELS_DIR}",
     output_dir="${OUTPUT_DIR}",
+    dry_run=(sys.argv[1] == "--dry-run") if len(sys.argv) > 1 and sys.argv[1] else False,
 )
 PYEOF
 }
@@ -450,7 +474,7 @@ case "${1:-}" in
         fi
         ;;
     predict)
-        run_predict
+        run_predict "${2:-}"
         ;;
     *)
         echo "TCGPlayer Price Monitor"
@@ -464,6 +488,6 @@ case "${1:-}" in
         echo "  baseline                   Set current data as baseline"
         echo "  sync                       Download MTGJson data"
         echo "  train [--remote <host>]    Train spike classifier"
-        echo "  predict                    Run predictions + recommendations"
+        echo "  predict [--dry-run]        Run predictions + recommendations"
         ;;
 esac

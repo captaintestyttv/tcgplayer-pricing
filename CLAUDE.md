@@ -35,12 +35,13 @@ bash scripts/monitor.sh train --remote <host>  # remote GPU via SSH
 
 # Run full predictive pipeline (forecast + spike detection + recommendations)
 bash scripts/monitor.sh predict
+bash scripts/monitor.sh predict --dry-run  # preview without writing files
 ```
 
 ## Running Tests
 
 ```bash
-# Run the full test suite (29 tests)
+# Run the full test suite (43 tests)
 python3 -m pytest tests/ -v
 
 # Run a single test file
@@ -60,12 +61,13 @@ Entry point is `scripts/monitor.sh` (bash with embedded Python heredocs). The pr
 | `scripts/monitor.sh` | Main CLI — all commands route through here |
 | `scripts/train_remote.py` | Entry point for remote GPU training jobs |
 | `lib/` | Python modules for predictive pricing pipeline |
+| `lib/config.py` | Centralized constants (fees, thresholds, hyperparameters) |
 | `lib/mtgjson.py` | MTGJson download, caching, and inventory builder |
 | `lib/features.py` | Feature extraction + spike labeling for training |
 | `lib/forecast.py` | Per-card linear regression price forecasting |
 | `lib/spike.py` | XGBoost spike classifier (train + score) |
 | `lib/predict.py` | Prediction orchestration — ties everything together |
-| `tests/` | pytest test suite (29 tests across 5 files) |
+| `tests/` | pytest test suite (43 tests across 5 files) |
 | `tests/fixtures/` | Test fixture data (inventory_cards.json) |
 | `docs/plans/` | Design docs and implementation plans |
 | `history/` | Timestamped export archives + `latest.csv` + `baseline.csv` |
@@ -73,6 +75,7 @@ Entry point is `scripts/monitor.sh` (bash with embedded Python heredocs). The pr
 | `data/mtgjson/` | Cached MTGJson files (~650MB, gitignored) |
 | `models/` | Trained model files (gitignored) |
 | `tcgplayer-exports/` | Drop zone for raw TCGPlayer downloads (gitignored) |
+| `.github/workflows/` | CI — runs tests on push/PR to main |
 
 ### Data Pipeline
 
@@ -83,15 +86,17 @@ Entry point is `scripts/monitor.sh` (bash with embedded Python heredocs). The pr
 
 ### Python Modules
 
+**`lib/config.py`** — Single source of truth for all tunable constants: fee values, pricing thresholds, model hyperparameters, network settings, and CSV schema. Also provides `get_logger(name)` for structured logging (level controlled by `LOG_LEVEL` env var).
+
 **`lib/features.py`** — Extracts 8 features per card: `rarity_rank`, `num_printings`, `set_age_days`, `formats_legal_count`, `price_momentum_7d`, `price_volatility_30d`, `current_price`, `tcgplayer_id`. Spike threshold: >20% price increase in 30 days.
 
 **`lib/forecast.py`** — Linear regression on last 90 days of price history. Requires minimum 14 days of data. Returns 7-day and 30-day price predictions plus trend direction (up/down/flat with 3% threshold). Floor at $0.01.
 
-**`lib/spike.py`** — XGBoost classifier (200 estimators, max_depth=4, learning_rate=0.1). Uses 7 features (all except `tcgplayer_id` and `spike` label). Outputs probability 0–1. Supports CPU and CUDA devices. Model saved as `.json`.
+**`lib/spike.py`** — XGBoost classifier (200 estimators, max_depth=4, learning_rate=0.1). Uses 7 features (all except `tcgplayer_id` and `spike` label). Outputs probability 0–1. Supports CPU and CUDA devices. Model saved as `.json` with companion `_meta.json` recording training timestamp, sample count, device, and spike rate.
 
-**`lib/predict.py`** — Orchestrates the full pipeline. Loads latest.csv + inventory cache, auto-trains if model missing, scores all cards, applies pricing rules. Spike probability >= 0.6 triggers HOLD signal. Outputs 13-column predictions CSV and filtered watchlist CSV.
+**`lib/predict.py`** — Orchestrates the full pipeline. Loads latest.csv + inventory cache, auto-trains if model missing, scores all cards, applies pricing rules. Spike probability >= 0.6 triggers HOLD signal. Outputs 13-column predictions CSV and filtered watchlist CSV. Supports `--dry-run` for preview without file output.
 
-**`lib/mtgjson.py`** — Downloads and caches MTGJson bulk files. Builds SKU-to-UUID mapping from TcgplayerSkus.json to match TCGPlayer inventory IDs to card UUIDs in AllIdentifiers.json. Streams large JSON files to manage memory.
+**`lib/mtgjson.py`** — Downloads and caches MTGJson bulk files with retry logic (exponential backoff) and atomic writes (temp file + rename). Builds SKU-to-UUID mapping from TcgplayerSkus.json to match TCGPlayer inventory IDs to card UUIDs in AllIdentifiers.json.
 
 ### Fee Constants
 
@@ -131,8 +136,11 @@ The system degrades gracefully when components are unavailable:
 ## Conventions
 
 - **Bash + Python hybrid**: `monitor.sh` uses heredocs (`<<PYEOF`) for inline Python. The `lib/` modules are standard Python imported via `sys.path.insert`.
+- **Configuration**: All tunable constants live in `lib/config.py`. Import from there — never duplicate values.
+- **Logging**: Use `from lib.config import get_logger; log = get_logger(__name__)`. Set `LOG_LEVEL=DEBUG` env var for verbose output.
 - **Path handling**: All paths derive from `SCRIPT_DIR`/`PRICING_DIR` — no hardcoded absolute paths.
 - **Timestamps**: `YYYYMMDD-HHMMSS` format for filenames.
 - **Card IDs**: Column is `TCGplayer Id` (string). Matching to MTGJson uses SKU-to-UUID mapping via TcgplayerSkus.json.
-- **Testing**: pytest with temporary directories for isolation. Fixtures in `tests/fixtures/`. Each module has its own test file.
+- **CSV validation**: Import validates required columns (`TCGplayer Id`, `Product Name`, `TCG Market Price`, `TCG Marketplace Price`, `Total Quantity`) before accepting a file.
+- **Testing**: pytest with temporary directories for isolation. Fixtures in `tests/fixtures/`. Each module has its own test file. CI runs via GitHub Actions on push/PR to main.
 - **Output CSVs**: Written to `output/` with timestamped filenames. The `output/` directory is gitignored and created on demand.
