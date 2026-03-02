@@ -10,6 +10,7 @@ from lib.config import N_ESTIMATORS, MAX_DEPTH, LEARNING_RATE, get_logger
 log = get_logger(__name__)
 
 FEATURE_COLS = [
+    # Original
     "rarity_rank",
     "num_printings",
     "set_age_days",
@@ -17,6 +18,25 @@ FEATURE_COLS = [
     "price_momentum_7d",
     "price_volatility_30d",
     "current_price",
+    # Phase 1: card metadata
+    "edhrec_rank",
+    "edhrec_saltiness",
+    "is_reserved_list",
+    "is_legendary",
+    "is_creature",
+    "color_count",
+    "keyword_count",
+    "mana_value",
+    "subtype_count",
+    # Phase 2: foil & buylist
+    "foil_to_normal_ratio",
+    "buylist_ratio",
+    "buylist_momentum_7d",
+    # Phase 3: cluster
+    "cluster_momentum_7d",
+    # Phase 4: change detection
+    "recently_reprinted",
+    "legality_changed",
 ]
 
 

@@ -2,7 +2,7 @@
 import json
 import pytest
 from pathlib import Path
-from lib.features import extract_features, generate_training_data
+from lib.features import extract_features, generate_training_data, compute_cluster_features
 
 FIXTURES = Path(__file__).parent / "fixtures" / "inventory_cards.json"
 
@@ -16,6 +16,16 @@ def test_extract_features_keys(cards):
         "tcgplayer_id", "rarity_rank", "num_printings", "set_age_days",
         "formats_legal_count", "price_momentum_7d", "price_volatility_30d",
         "current_price",
+        # Phase 1
+        "edhrec_rank", "edhrec_saltiness", "is_reserved_list",
+        "is_legendary", "is_creature", "color_count", "keyword_count",
+        "mana_value", "subtype_count",
+        # Phase 2
+        "foil_to_normal_ratio", "buylist_ratio", "buylist_momentum_7d",
+        # Phase 3
+        "cluster_momentum_7d",
+        # Phase 4
+        "recently_reprinted", "legality_changed",
     }
     assert expected_keys == set(feat.keys())
 
@@ -44,6 +54,8 @@ def test_generate_training_data_structure(cards):
     assert len(rows) > 0
     assert "spike" in rows[0]
     assert "rarity_rank" in rows[0]
+    assert "edhrec_rank" in rows[0]
+    assert "cluster_momentum_7d" in rows[0]
 
 def test_generate_training_data_labels_spike(cards):
     rows = generate_training_data(cards)
@@ -58,6 +70,23 @@ def test_extract_features_empty_price_history():
     assert feat["price_momentum_7d"] == 0.0
     assert feat["price_volatility_30d"] == 0.0
     assert feat["set_age_days"] == 0
+    # Phase 1 defaults
+    assert feat["edhrec_rank"] == 99999
+    assert feat["edhrec_saltiness"] == 0.0
+    assert feat["is_reserved_list"] == 0
+    assert feat["is_legendary"] == 0
+    assert feat["is_creature"] == 0
+    assert feat["color_count"] == 0
+    assert feat["keyword_count"] == 0
+    assert feat["mana_value"] == 0.0
+    assert feat["subtype_count"] == 0
+    # Phase 2 defaults
+    assert feat["foil_to_normal_ratio"] == 0.0
+    assert feat["buylist_ratio"] == 0.0
+    assert feat["buylist_momentum_7d"] == 0.0
+    # Phase 4 defaults
+    assert feat["recently_reprinted"] == 0
+    assert feat["legality_changed"] == 0
 
 
 def test_extract_features_unknown_rarity():
@@ -78,3 +107,70 @@ def test_generate_training_data_skips_short_history():
     cards = {"0": {"rarity": "common", "printings": [], "legalities": {}, "price_history": {"2026-01-01": 1.0}}}
     rows = generate_training_data(cards)
     assert rows == []
+
+
+# Phase 1 tests
+def test_metadata_features(cards):
+    feat = extract_features("111111", cards["111111"])
+    assert feat["edhrec_rank"] == 1500
+    assert feat["edhrec_saltiness"] == pytest.approx(1.2)
+    assert feat["is_reserved_list"] == 0
+    assert feat["is_legendary"] == 1
+    assert feat["is_creature"] == 1
+    assert feat["color_count"] == 1  # ["G"]
+    assert feat["keyword_count"] == 1  # ["Trample"]
+    assert feat["mana_value"] == pytest.approx(3.0)
+    assert feat["subtype_count"] == 2  # ["Elf", "Warrior"]
+
+
+def test_metadata_defaults_when_missing(cards):
+    feat = extract_features("222222", cards["222222"])
+    assert feat["edhrec_rank"] == 99999  # null -> default
+    assert feat["edhrec_saltiness"] == 0.0  # null -> default
+    assert feat["is_legendary"] == 0
+    assert feat["is_creature"] == 0  # Instant, not Creature
+    assert feat["subtype_count"] == 0
+
+
+# Phase 2 tests
+def test_foil_buylist_features(cards):
+    feat = extract_features("111111", cards["111111"])
+    # foil_to_normal_ratio: 3.85 / 1.91
+    assert feat["foil_to_normal_ratio"] == pytest.approx(3.85 / 1.91, rel=1e-3)
+    # buylist_ratio: 0.80 / 1.91
+    assert feat["buylist_ratio"] == pytest.approx(0.80 / 1.91, rel=1e-3)
+    # buylist_momentum_7d: (0.80 - 0.73) / 0.73
+    assert feat["buylist_momentum_7d"] == pytest.approx((0.80 - 0.73) / 0.73, rel=1e-3)
+
+
+def test_foil_buylist_defaults_no_data(cards):
+    feat = extract_features("222222", cards["222222"])
+    assert feat["foil_to_normal_ratio"] == 0.0
+    assert feat["buylist_ratio"] == 0.0
+    assert feat["buylist_momentum_7d"] == 0.0
+
+
+# Phase 3 tests
+def test_compute_cluster_features(cards):
+    features = [extract_features(tid, card) for tid, card in cards.items()]
+    compute_cluster_features(features, cards)
+    # Card 111111 has subtypes ["Elf", "Warrior"], should have non-zero cluster momentum
+    feat_111 = next(f for f in features if f["tcgplayer_id"] == "111111")
+    assert feat_111["cluster_momentum_7d"] != 0.0  # has subtypes + momentum
+    # Card 222222 has no subtypes, should be 0.0
+    feat_222 = next(f for f in features if f["tcgplayer_id"] == "222222")
+    assert feat_222["cluster_momentum_7d"] == 0.0
+
+
+def test_cluster_features_single_card():
+    """Cluster momentum for a lone subtype equals the card's own momentum."""
+    cards = {
+        "1": {
+            "rarity": "rare", "printings": ["A"], "legalities": {},
+            "subtypes": ["Dragon"],
+            "price_history": {f"2026-01-{i:02d}": float(i) for i in range(1, 18)},
+        },
+    }
+    features = [extract_features("1", cards["1"])]
+    compute_cluster_features(features, cards)
+    assert features[0]["cluster_momentum_7d"] == pytest.approx(features[0]["price_momentum_7d"])

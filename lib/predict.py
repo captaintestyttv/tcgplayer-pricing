@@ -9,7 +9,7 @@ from lib.config import (
     HIGH_VALUE_THRESHOLD, MIN_MARGIN, MARKET_UP_PCT, MARKET_DOWN_PCT,
     COMPETITIVE_PCT, SUGGESTED_DISCOUNT, MIN_PRICE, get_logger,
 )
-from lib.features import extract_features, generate_training_data
+from lib.features import extract_features, generate_training_data, compute_cluster_features
 from lib.forecast import forecast_card, trend_direction
 from lib.mtgjson import load_inventory_cache
 from lib.spike import FEATURE_COLS, score, train, load_model_meta
@@ -78,6 +78,7 @@ def run_predict(
     spike_scores = {}
     if model_path and os.path.exists(model_path):
         features_list = [extract_features(tid, card) for tid, card in cache.items()]
+        compute_cluster_features(features_list, cache)
         scores = score(features_list, model_path)
         spike_scores = {f["tcgplayer_id"]: s for f, s in zip(features_list, scores)}
 

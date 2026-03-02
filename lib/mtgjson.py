@@ -104,6 +104,20 @@ def build_inventory_cache(
         except (KeyError, TypeError):
             log.debug("No TCGPlayer retail prices for sku %s (uuid %s)", sku_id, uuid)
 
+        foil_price_history = {}
+        try:
+            foil = prices_data[uuid]["paper"]["tcgplayer"]["retail"]["foil"]
+            foil_price_history = {k: float(v) for k, v in foil.items()}
+        except (KeyError, TypeError):
+            pass
+
+        buylist_price_history = {}
+        try:
+            buylist = prices_data[uuid]["paper"]["tcgplayer"]["buylist"]["normal"]
+            buylist_price_history = {k: float(v) for k, v in buylist.items()}
+        except (KeyError, TypeError):
+            pass
+
         cache[sku_id] = {
             "uuid": uuid,
             "name": card.get("name", ""),
@@ -114,8 +128,37 @@ def build_inventory_cache(
                 k: v.lower() for k, v in card.get("legalities", {}).items()
             },
             "price_history": price_history,
+            # Phase 1: card metadata
+            "edhrecRank": card.get("edhrecRank"),
+            "edhrecSaltiness": card.get("edhrecSaltiness"),
+            "isReserved": card.get("isReserved", False),
+            "supertypes": card.get("supertypes", []),
+            "types": card.get("types", []),
+            "subtypes": card.get("subtypes", []),
+            "colorIdentity": card.get("colorIdentity", []),
+            "keywords": card.get("keywords", []),
+            "manaValue": card.get("manaValue", 0),
+            "text": card.get("text", ""),
+            # Phase 2: foil & buylist price channels
+            "foil_price_history": foil_price_history,
+            "buylist_price_history": buylist_price_history,
+            # Phase 4: change flags (set by detect_changes after build)
+            "recently_reprinted": 0,
+            "legality_changed": 0,
         }
     return cache
+
+
+def detect_changes(old_cache: dict, new_cache: dict) -> None:
+    """Compare old and new caches, set change flags on new_cache in-place."""
+    for tid, new_card in new_cache.items():
+        old_card = old_cache.get(tid, {})
+        new_card["recently_reprinted"] = int(
+            len(new_card.get("printings", [])) > len(old_card.get("printings", []))
+        )
+        new_card["legality_changed"] = int(
+            new_card.get("legalities", {}) != old_card.get("legalities", {})
+        )
 
 
 def load_inventory_cache(data_dir: str) -> dict:
@@ -179,7 +222,11 @@ def sync(
     skus_data = load_json_file(skus_path)["data"]
     sku_to_uuid = build_sku_to_uuid(skus_data)
 
+    old_cache = load_inventory_cache(data_dir)
     cache = build_inventory_cache(inventory_ids, identifiers_data, prices_data, sku_to_uuid)
+    if old_cache:
+        detect_changes(old_cache, cache)
+
     cache_path = os.path.join(data_dir, CACHE_FILENAME)
     with open(cache_path, "w") as f:
         json.dump(cache, f, indent=2)

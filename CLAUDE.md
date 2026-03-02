@@ -41,7 +41,7 @@ bash scripts/monitor.sh predict --dry-run  # preview without writing files
 ## Running Tests
 
 ```bash
-# Run the full test suite (43 tests)
+# Run the full test suite (54 tests)
 python3 -m pytest tests/ -v
 
 # Run a single test file
@@ -67,7 +67,7 @@ Entry point is `scripts/monitor.sh` (bash with embedded Python heredocs). The pr
 | `lib/forecast.py` | Per-card linear regression price forecasting |
 | `lib/spike.py` | XGBoost spike classifier (train + score) |
 | `lib/predict.py` | Prediction orchestration — ties everything together |
-| `tests/` | pytest test suite (43 tests across 5 files) |
+| `tests/` | pytest test suite (54 tests across 5 files) |
 | `tests/fixtures/` | Test fixture data (inventory_cards.json) |
 | `docs/plans/` | Design docs and implementation plans |
 | `history/` | Timestamped export archives + `latest.csv` + `baseline.csv` |
@@ -88,15 +88,15 @@ Entry point is `scripts/monitor.sh` (bash with embedded Python heredocs). The pr
 
 **`lib/config.py`** — Single source of truth for all tunable constants: fee values, pricing thresholds, model hyperparameters, network settings, and CSV schema. Also provides `get_logger(name)` for structured logging (level controlled by `LOG_LEVEL` env var).
 
-**`lib/features.py`** — Extracts 8 features per card: `rarity_rank`, `num_printings`, `set_age_days`, `formats_legal_count`, `price_momentum_7d`, `price_volatility_30d`, `current_price`, `tcgplayer_id`. Spike threshold: >20% price increase in 30 days.
+**`lib/features.py`** — Extracts 22 features per card across 4 signal categories. Original 7: `rarity_rank`, `num_printings`, `set_age_days`, `formats_legal_count`, `price_momentum_7d`, `price_volatility_30d`, `current_price`. Card metadata (9): `edhrec_rank`, `edhrec_saltiness`, `is_reserved_list`, `is_legendary`, `is_creature`, `color_count`, `keyword_count`, `mana_value`, `subtype_count`. Foil/buylist (3): `foil_to_normal_ratio`, `buylist_ratio`, `buylist_momentum_7d`. Cluster (1): `cluster_momentum_7d` (max avg momentum across card's subtypes, computed post-hoc via `compute_cluster_features()`). Change detection (2): `recently_reprinted`, `legality_changed`. Spike threshold: >20% price increase in 30 days.
 
 **`lib/forecast.py`** — Linear regression on last 90 days of price history. Requires minimum 14 days of data. Returns 7-day and 30-day price predictions plus trend direction (up/down/flat with 3% threshold). Floor at $0.01.
 
-**`lib/spike.py`** — XGBoost classifier (200 estimators, max_depth=4, learning_rate=0.1). Uses 7 features (all except `tcgplayer_id` and `spike` label). Outputs probability 0–1. Supports CPU and CUDA devices. Model saved as `.json` with companion `_meta.json` recording training timestamp, sample count, device, and spike rate.
+**`lib/spike.py`** — XGBoost classifier (200 estimators, max_depth=4, learning_rate=0.1). Uses 22 features (all except `tcgplayer_id` and `spike` label). Outputs probability 0–1. Supports CPU and CUDA devices. Model saved as `.json` with companion `_meta.json` recording training timestamp, sample count, device, and spike rate.
 
 **`lib/predict.py`** — Orchestrates the full pipeline. Loads latest.csv + inventory cache, auto-trains if model missing, scores all cards, applies pricing rules. Spike probability >= 0.6 triggers HOLD signal. Outputs 13-column predictions CSV and filtered watchlist CSV. Supports `--dry-run` for preview without file output.
 
-**`lib/mtgjson.py`** — Downloads and caches MTGJson bulk files with retry logic (exponential backoff) and atomic writes (temp file + rename). Builds SKU-to-UUID mapping from TcgplayerSkus.json to match TCGPlayer inventory IDs to card UUIDs in AllIdentifiers.json.
+**`lib/mtgjson.py`** — Downloads and caches MTGJson bulk files with retry logic (exponential backoff) and atomic writes (temp file + rename). Builds SKU-to-UUID mapping from TcgplayerSkus.json to match TCGPlayer inventory IDs to card UUIDs in AllIdentifiers.json. Cache includes card metadata (edhrecRank, isReserved, supertypes, types, subtypes, colorIdentity, keywords, manaValue, text), foil and buylist price histories, and change detection flags (recently_reprinted, legality_changed) computed by comparing with the previous cache on rebuild.
 
 ### Fee Constants
 
