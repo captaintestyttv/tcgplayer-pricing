@@ -36,12 +36,15 @@ bash scripts/monitor.sh train --remote <host>  # remote GPU via SSH
 # Run full predictive pipeline (forecast + spike detection + recommendations)
 bash scripts/monitor.sh predict
 bash scripts/monitor.sh predict --dry-run  # preview without writing files
+
+# Evaluate model performance against historical data
+bash scripts/monitor.sh backtest
 ```
 
 ## Running Tests
 
 ```bash
-# Run the full test suite (54 tests)
+# Run the full test suite (80 tests)
 python3 -m pytest tests/ -v
 
 # Run a single test file
@@ -67,7 +70,8 @@ Entry point is `scripts/monitor.sh` (bash with embedded Python heredocs). The pr
 | `lib/forecast.py` | Per-card linear regression price forecasting |
 | `lib/spike.py` | XGBoost spike classifier (train + score) |
 | `lib/predict.py` | Prediction orchestration — ties everything together |
-| `tests/` | pytest test suite (54 tests across 5 files) |
+| `lib/backtest.py` | Model evaluation against historical training data |
+| `tests/` | pytest test suite (80 tests across 6 files) |
 | `tests/fixtures/` | Test fixture data (inventory_cards.json) |
 | `docs/plans/` | Design docs and implementation plans |
 | `history/` | Timestamped export archives + `latest.csv` + `baseline.csv` |
@@ -80,23 +84,26 @@ Entry point is `scripts/monitor.sh` (bash with embedded Python heredocs). The pr
 ### Data Pipeline
 
 1. **Import** — TCGPlayer CSV exports go into `history/` with timestamps
-2. **Sync** — Downloads MTGJson files (AllPrices.json, AllIdentifiers.json, TcgplayerSkus.json), builds `inventory_cards.json` cache joining card metadata with price history scoped to the user's inventory
-3. **Train** — Generates training data via 31-day sliding windows, labels spikes (>20% increase in 30 days), trains XGBoost classifier
-4. **Predict** — Runs forecasting + spike scoring + fee-based margin calc, outputs `predictions-*.csv` and `watchlist-*.csv`
+2. **Sync** — Downloads MTGJson files (AllPrices.json, AllIdentifiers.json, TcgplayerSkus.json, SetList.json), builds `inventory_cards.json` cache joining card metadata with price history scoped to the user's inventory
+3. **Train** — Generates training data via 31-day sliding windows, labels spikes (>20% increase in 30 days), trains XGBoost classifier with stratified validation split. Records validation metrics, feature importance, and feature version in companion metadata file
+4. **Predict** — Runs forecasting + spike scoring + fee-based margin calc, outputs `predictions-*.csv` (with confidence intervals) and `watchlist-*.csv`. Auto-retrains if model version mismatches current features
+5. **Backtest** — Evaluates trained model against historical training data, computing accuracy, precision, recall, F1, confusion matrix, and probability calibration bins. Outputs `backtest-*.json`
 
 ### Python Modules
 
 **`lib/config.py`** — Single source of truth for all tunable constants: fee values, pricing thresholds, model hyperparameters, network settings, and CSV schema. Also provides `get_logger(name)` for structured logging (level controlled by `LOG_LEVEL` env var).
 
-**`lib/features.py`** — Extracts 22 features per card across 4 signal categories. Original 7: `rarity_rank`, `num_printings`, `set_age_days`, `formats_legal_count`, `price_momentum_7d`, `price_volatility_30d`, `current_price`. Card metadata (9): `edhrec_rank`, `edhrec_saltiness`, `is_reserved_list`, `is_legendary`, `is_creature`, `color_count`, `keyword_count`, `mana_value`, `subtype_count`. Foil/buylist (3): `foil_to_normal_ratio`, `buylist_ratio`, `buylist_momentum_7d`. Cluster (1): `cluster_momentum_7d` (max avg momentum across card's subtypes, computed post-hoc via `compute_cluster_features()`). Change detection (2): `recently_reprinted`, `legality_changed`. Spike threshold: >20% price increase in 30 days.
+**`lib/features.py`** — Extracts 24 features per card across 6 signal categories. Original 7: `rarity_rank`, `num_printings`, `set_age_days`, `formats_legal_count`, `price_momentum_7d`, `price_volatility_30d`, `current_price`. Card metadata (9): `edhrec_rank`, `edhrec_saltiness`, `is_reserved_list`, `is_legendary`, `is_creature`, `color_count`, `keyword_count`, `mana_value`, `subtype_count`. Foil/buylist (3): `foil_to_normal_ratio`, `buylist_ratio`, `buylist_momentum_7d`. Cluster (1): `cluster_momentum_7d` (max avg momentum across card's subtypes, computed post-hoc via `compute_cluster_features()`). Change detection (2): `recently_reprinted`, `legality_changed`. Set timing (2): `set_release_proximity` (days until set release, 0–90), `spoiler_season` (binary, from partial preview or proximity ≤30 days). Accepts optional `reference_date` for historically-correct feature computation in training windows. Spike threshold: >20% price increase in 30 days.
 
-**`lib/forecast.py`** — Linear regression on last 90 days of price history. Requires minimum 14 days of data. Returns 7-day and 30-day price predictions plus trend direction (up/down/flat with 3% threshold). Floor at $0.01.
+**`lib/forecast.py`** — Linear regression on last 90 days of price history. Requires minimum 14 days of data. Returns 7-day and 30-day price predictions plus trend direction (up/down/flat with 3% threshold). Floor at $0.01. Also provides `forecast_with_confidence()` returning prediction intervals (lower/upper bounds at 95% confidence) and R-squared goodness of fit, using residual standard error with leverage-based intervals.
 
-**`lib/spike.py`** — XGBoost classifier (200 estimators, max_depth=4, learning_rate=0.1). Uses 22 features (all except `tcgplayer_id` and `spike` label). Outputs probability 0–1. Supports CPU and CUDA devices. Model saved as `.json` with companion `_meta.json` recording training timestamp, sample count, device, and spike rate.
+**`lib/spike.py`** — XGBoost classifier (200 estimators, max_depth=4, learning_rate=0.1). Uses 24 features (all except `tcgplayer_id` and `spike` label). Outputs probability 0–1. Supports CPU and CUDA devices. Training uses stratified 80/20 validation split with `scale_pos_weight` for class imbalance. Model saved as `.json` with companion `_meta.json` recording: training timestamp, sample count, device, spike rate, hyperparameters (including scale_pos_weight), validation metrics (accuracy, AUC, precision, recall), feature importance (sorted descending), and feature column list for version compatibility. `check_model_compatibility()` validates feature list against current code; `score()` raises on mismatch.
 
-**`lib/predict.py`** — Orchestrates the full pipeline. Loads latest.csv + inventory cache, auto-trains if model missing, scores all cards, applies pricing rules. Spike probability >= 0.6 triggers HOLD signal. Outputs 13-column predictions CSV and filtered watchlist CSV. Supports `--dry-run` for preview without file output.
+**`lib/predict.py`** — Orchestrates the full pipeline. Loads latest.csv + inventory cache, auto-trains if model missing or version-incompatible, scores all cards, applies pricing rules. Spike probability >= 0.6 triggers HOLD signal. Outputs 18-column predictions CSV (with confidence intervals and R-squared) and filtered watchlist CSV. Supports `--dry-run` for preview without file output.
 
-**`lib/mtgjson.py`** — Downloads and caches MTGJson bulk files with retry logic (exponential backoff) and atomic writes (temp file + rename). Builds SKU-to-UUID mapping from TcgplayerSkus.json to match TCGPlayer inventory IDs to card UUIDs in AllIdentifiers.json. Cache includes card metadata (edhrecRank, isReserved, supertypes, types, subtypes, colorIdentity, keywords, manaValue, text), foil and buylist price histories, and change detection flags (recently_reprinted, legality_changed) computed by comparing with the previous cache on rebuild.
+**`lib/backtest.py`** — Evaluates model quality by scoring training data and comparing predicted probabilities to actual spike labels. Computes confusion matrix (TP/FP/FN/TN), accuracy, precision, recall, F1, and 10-bin probability calibration. Writes results to `output/backtest-*.json`. Requires trained model and inventory cache.
+
+**`lib/mtgjson.py`** — Downloads and caches MTGJson bulk files with retry logic (exponential backoff) and atomic writes (temp file + rename). Builds SKU-to-UUID mapping from TcgplayerSkus.json to match TCGPlayer inventory IDs to card UUIDs in AllIdentifiers.json. Also downloads SetList.json for set release dates and spoiler status. Cache includes card metadata (edhrecRank, isReserved, supertypes, types, subtypes, colorIdentity, keywords, manaValue, text), foil and buylist price histories, set timing data (setReleaseDate, setIsPartialPreview), and change detection flags (recently_reprinted, legality_changed) computed by comparing with the previous cache on rebuild.
 
 ### Fee Constants
 
@@ -122,14 +129,14 @@ Cards >= $5 use no shipping revenue and $1.50 postage (media mail assumed).
 
 - `HOLD` — Spike probability >= 0.6 (card likely to increase, don't lower price)
 - `SELL_NOW` — Downtrend + price near market (sell before further decline)
-- Predictions CSV includes: Predicted 7d, Predicted 30d, Trend, Spike Probability, Signal
+- Predictions CSV includes: Predicted 7d, 7d Lower, 7d Upper, Predicted 30d, 30d Lower, 30d Upper, R-Squared, Trend, Spike Probability, Signal
 
 ### Degradation Behavior
 
 The system degrades gracefully when components are unavailable:
 
 - No MTGJson cache → pricing-only output, no predictions
-- Missing model → auto-trains before predict
+- Missing or version-mismatched model → auto-retrains before predict
 - Insufficient price history (<14 days) → skips forecast, uses metadata features only
 - Remote GPU unreachable → falls back to local CPU training
 

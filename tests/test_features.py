@@ -26,6 +26,8 @@ def test_extract_features_keys(cards):
         "cluster_momentum_7d",
         # Phase 4
         "recently_reprinted", "legality_changed",
+        # Phase 5
+        "set_release_proximity", "spoiler_season",
     }
     assert expected_keys == set(feat.keys())
 
@@ -87,6 +89,9 @@ def test_extract_features_empty_price_history():
     # Phase 4 defaults
     assert feat["recently_reprinted"] == 0
     assert feat["legality_changed"] == 0
+    # Phase 5 defaults
+    assert feat["set_release_proximity"] == 90  # RELEASE_PROXIMITY_MAX
+    assert feat["spoiler_season"] == 0
 
 
 def test_extract_features_unknown_rarity():
@@ -174,3 +179,58 @@ def test_cluster_features_single_card():
     features = [extract_features("1", cards["1"])]
     compute_cluster_features(features, cards)
     assert features[0]["cluster_momentum_7d"] == pytest.approx(features[0]["price_momentum_7d"])
+
+
+# Phase 5 tests
+def test_set_release_proximity_upcoming():
+    from datetime import datetime
+    card = {
+        "rarity": "rare", "printings": ["A"], "legalities": {},
+        "price_history": {"2026-01-01": 1.0},
+        "setReleaseDate": "2026-02-15",
+    }
+    feat = extract_features("1", card, reference_date=datetime(2026, 2, 1))
+    assert feat["set_release_proximity"] == 14
+
+
+def test_set_release_proximity_past():
+    from datetime import datetime
+    card = {
+        "rarity": "rare", "printings": ["A"], "legalities": {},
+        "price_history": {"2026-01-01": 1.0},
+        "setReleaseDate": "2025-10-01",
+    }
+    feat = extract_features("1", card, reference_date=datetime(2026, 2, 1))
+    assert feat["set_release_proximity"] == 0  # clamped to 0 for past dates
+
+
+def test_spoiler_season_active():
+    from datetime import datetime
+    card = {
+        "rarity": "rare", "printings": ["A"], "legalities": {},
+        "price_history": {"2026-01-01": 1.0},
+        "setIsPartialPreview": True,
+    }
+    feat = extract_features("1", card, reference_date=datetime(2026, 2, 1))
+    assert feat["spoiler_season"] == 1
+
+
+def test_spoiler_season_from_proximity():
+    from datetime import datetime
+    card = {
+        "rarity": "rare", "printings": ["A"], "legalities": {},
+        "price_history": {"2026-01-01": 1.0},
+        "setReleaseDate": "2026-02-20",
+        "setIsPartialPreview": False,
+    }
+    feat = extract_features("1", card, reference_date=datetime(2026, 2, 1))
+    assert feat["spoiler_season"] == 1  # 19 days out, within SPOILER_WINDOW_DAYS
+
+
+def test_reference_date_affects_set_age(cards):
+    from datetime import datetime
+    ref = datetime(2026, 3, 1)
+    feat = extract_features("111111", cards["111111"], reference_date=ref)
+    # set_age_days = ref - first price date (2025-11-27)
+    expected = (ref - datetime(2025, 11, 27)).days
+    assert feat["set_age_days"] == expected

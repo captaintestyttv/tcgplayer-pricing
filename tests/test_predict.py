@@ -57,7 +57,9 @@ def test_predictions_csv_has_required_columns(setup_dirs):
     expected_cols = {
         "TCGplayer Id", "Product Name", "Current Price", "Market Price",
         "Suggested Price", "Action", "Reason", "Margin",
-        "Predicted 7d", "Predicted 30d", "Trend", "Spike Probability", "Signal",
+        "Predicted 7d", "7d Lower", "7d Upper",
+        "Predicted 30d", "30d Lower", "30d Upper",
+        "R-Squared", "Trend", "Spike Probability", "Signal",
     }
     assert expected_cols.issubset(set(reader.fieldnames))
 

@@ -3,12 +3,18 @@ from collections import defaultdict
 import numpy as np
 from datetime import datetime
 
-from lib.config import RARITY_RANK, SPIKE_THRESHOLD, MIN_PRICE, get_logger
+from lib.config import (
+    RARITY_RANK, SPIKE_THRESHOLD, MIN_PRICE, SPOILER_WINDOW_DAYS,
+    RELEASE_PROXIMITY_MAX, get_logger,
+)
 
 log = get_logger(__name__)
 
 
-def extract_features(tcgplayer_id: str, card: dict) -> dict:
+def extract_features(tcgplayer_id: str, card: dict, reference_date: datetime | None = None) -> dict:
+    if reference_date is None:
+        reference_date = datetime.now()
+
     prices = card.get("price_history", {})
     sorted_entries = sorted(prices.items())
     price_vals = [float(v) for _, v in sorted_entries]
@@ -24,9 +30,26 @@ def extract_features(tcgplayer_id: str, card: dict) -> dict:
 
     if sorted_entries:
         first_date = datetime.fromisoformat(sorted_entries[0][0])
-        set_age_days = (datetime.now() - first_date).days
+        set_age_days = (reference_date - first_date).days
     else:
         set_age_days = 0
+
+    # Phase 5: set release signals
+    release_str = card.get("setReleaseDate", "")
+    if release_str:
+        try:
+            release_date = datetime.fromisoformat(release_str)
+            days_to_release = (release_date - reference_date).days
+            set_release_proximity = max(0, min(days_to_release, RELEASE_PROXIMITY_MAX))
+        except ValueError:
+            set_release_proximity = RELEASE_PROXIMITY_MAX
+    else:
+        set_release_proximity = RELEASE_PROXIMITY_MAX
+
+    spoiler_season = int(
+        card.get("setIsPartialPreview", False)
+        or (0 < set_release_proximity <= SPOILER_WINDOW_DAYS)
+    )
 
     # Phase 2: foil & buylist signals
     foil_prices = card.get("foil_price_history", {})
@@ -81,6 +104,9 @@ def extract_features(tcgplayer_id: str, card: dict) -> dict:
         # Phase 4: change detection (2 features)
         "recently_reprinted": int(card.get("recently_reprinted", 0)),
         "legality_changed": int(card.get("legality_changed", 0)),
+        # Phase 5: set release signals (2 features)
+        "set_release_proximity": set_release_proximity,
+        "spoiler_season": spoiler_season,
     }
 
 
@@ -131,7 +157,8 @@ def generate_training_data(cards: dict) -> list[dict]:
             snapshot["foil_price_history"] = {d: v for d, v in foil if d <= cutoff_date}
             snapshot["buylist_price_history"] = {d: v for d, v in buylist if d <= cutoff_date}
 
-            feat = extract_features(tcgplayer_id, snapshot)
+            ref_date = datetime.fromisoformat(cutoff_date)
+            feat = extract_features(tcgplayer_id, snapshot, reference_date=ref_date)
             feat["spike"] = spike
             rows.append(feat)
 

@@ -447,6 +447,22 @@ PYEOF
 }
 
 # =============================================================================
+# Run backtest
+# =============================================================================
+run_backtest() {
+    python3 - <<PYEOF
+import sys
+sys.path.insert(0, "${PRICING_DIR}")
+from lib.backtest import run_backtest
+run_backtest(
+    data_dir="${DATA_DIR}",
+    models_dir="${MODELS_DIR}",
+    output_dir="${OUTPUT_DIR}",
+)
+PYEOF
+}
+
+# =============================================================================
 # Main
 # =============================================================================
 case "${1:-}" in
@@ -476,6 +492,9 @@ case "${1:-}" in
     predict)
         run_predict "${2:-}"
         ;;
+    backtest)
+        run_backtest
+        ;;
     *)
         echo "TCGPlayer Price Monitor"
         echo ""
@@ -489,5 +508,6 @@ case "${1:-}" in
         echo "  sync                       Download MTGJson data"
         echo "  train [--remote <host>]    Train spike classifier"
         echo "  predict [--dry-run]        Run predictions + recommendations"
+        echo "  backtest                   Evaluate model against historical data"
         ;;
 esac

@@ -43,6 +43,8 @@ SUGGESTED_DISCOUNT = 0.98      # Suggested price = market * this for RAISE
 RARITY_RANK = {"common": 0, "uncommon": 1, "rare": 2, "mythic": 3}
 SPIKE_THRESHOLD = 0.20         # >20% increase in 30 days = spike
 MIN_PRICE = 0.01               # Floor for all price values
+SPOILER_WINDOW_DAYS = 30       # Days before release to flag spoiler season
+RELEASE_PROXIMITY_MAX = 90     # Clamp set_release_proximity at this many days
 
 # ---------------------------------------------------------------------------
 # Forecasting
@@ -57,6 +59,8 @@ TREND_THRESHOLD = 0.03         # Slope threshold for up/down vs flat
 N_ESTIMATORS = 200
 MAX_DEPTH = 4
 LEARNING_RATE = 0.1
+VALIDATION_SPLIT = 0.2             # Fraction of data held out for validation
+RANDOM_SEED = 42                   # Reproducible train/val split
 
 # ---------------------------------------------------------------------------
 # Prediction Pipeline

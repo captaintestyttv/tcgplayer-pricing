@@ -2,7 +2,7 @@
 import json
 import pytest
 from pathlib import Path
-from lib.forecast import forecast_card, trend_direction
+from lib.forecast import forecast_card, forecast_with_confidence, trend_direction
 
 FIXTURES = Path(__file__).parent / "fixtures" / "inventory_cards.json"
 
@@ -68,3 +68,59 @@ def test_trend_direction_with_zero_start():
     history = {f"2026-01-{i:02d}": 0.0 if i == 1 else 1.0 for i in range(1, 10)}
     result = trend_direction(history)
     assert result in ("up", "down", "flat")
+
+
+# Improvement 6: forecast with confidence
+def test_forecast_with_confidence_returns_dict(cards):
+    ph = cards["111111"]["price_history"]
+    result = forecast_with_confidence(ph, 7)
+    assert result is not None
+    assert "predicted" in result
+    assert "lower" in result
+    assert "upper" in result
+    assert "std_error" in result
+    assert "r_squared" in result
+
+
+def test_confidence_interval_bounds(cards):
+    ph = cards["111111"]["price_history"]
+    result = forecast_with_confidence(ph, 7)
+    assert result["lower"] <= result["predicted"] <= result["upper"]
+
+
+def test_confidence_30d_wider_than_7d(cards):
+    ph = cards["111111"]["price_history"]
+    r7 = forecast_with_confidence(ph, 7)
+    r30 = forecast_with_confidence(ph, 30)
+    width_7 = r7["upper"] - r7["lower"]
+    width_30 = r30["upper"] - r30["lower"]
+    assert width_30 >= width_7
+
+
+def test_confidence_r_squared_between_0_and_1(cards):
+    ph = cards["111111"]["price_history"]
+    result = forecast_with_confidence(ph, 7)
+    assert 0 <= result["r_squared"] <= 1
+
+
+def test_confidence_returns_none_for_insufficient_data():
+    assert forecast_with_confidence({}, 7) is None
+    short = {f"2026-01-{i:02d}": 1.0 for i in range(1, 10)}
+    assert forecast_with_confidence(short, 7) is None
+
+
+def test_confidence_lower_at_least_min_price():
+    # Declining prices should still floor at MIN_PRICE
+    history = {f"2026-01-{i:02d}": max(0.02, 1.0 - i * 0.05) for i in range(1, 20)}
+    result = forecast_with_confidence(history, 30)
+    if result:
+        assert result["lower"] >= 0.01
+        assert result["predicted"] >= 0.01
+
+
+def test_confidence_matches_point_forecast(cards):
+    """Point forecast and confidence forecast should agree on predicted value."""
+    ph = cards["111111"]["price_history"]
+    point = forecast_card(ph, 7)
+    conf = forecast_with_confidence(ph, 7)
+    assert point == pytest.approx(conf["predicted"], abs=0.001)

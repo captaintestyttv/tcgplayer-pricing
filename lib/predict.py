@@ -10,9 +10,9 @@ from lib.config import (
     COMPETITIVE_PCT, SUGGESTED_DISCOUNT, MIN_PRICE, get_logger,
 )
 from lib.features import extract_features, generate_training_data, compute_cluster_features
-from lib.forecast import forecast_card, trend_direction
+from lib.forecast import forecast_card, forecast_with_confidence, trend_direction
 from lib.mtgjson import load_inventory_cache
-from lib.spike import FEATURE_COLS, score, train, load_model_meta
+from lib.spike import FEATURE_COLS, score, train, load_model_meta, check_model_compatibility
 
 log = get_logger(__name__)
 
@@ -58,16 +58,13 @@ def run_predict(
         return
 
     model_path = os.path.join(models_dir, "spike_classifier.json")
-    if not os.path.exists(model_path):
-        existing_meta = load_model_meta(model_path)
-        if existing_meta:
-            log.warning(
-                "Overwriting model trained on %s (%s, %d samples) with auto-trained CPU model",
-                existing_meta.get("trained_at", "?"),
-                existing_meta.get("device", "?"),
-                existing_meta.get("num_samples", 0),
-            )
-        print("Model not found — training locally (CPU)...")
+    need_train = not os.path.exists(model_path)
+    if not need_train and not check_model_compatibility(model_path):
+        print("Model feature mismatch detected — retraining...")
+        need_train = True
+
+    if need_train:
+        print("Training locally (CPU)...")
         rows = generate_training_data(cache)
         if rows:
             train(rows, model_path, device="cpu")
@@ -85,7 +82,9 @@ def run_predict(
     PRED_FIELDS = [
         "TCGplayer Id", "Product Name", "Current Price", "Market Price",
         "Suggested Price", "Action", "Reason", "Margin",
-        "Predicted 7d", "Predicted 30d", "Trend", "Spike Probability", "Signal",
+        "Predicted 7d", "7d Lower", "7d Upper",
+        "Predicted 30d", "30d Lower", "30d Upper",
+        "R-Squared", "Trend", "Spike Probability", "Signal",
     ]
     WATCH_FIELDS = ["TCGplayer Id", "Product Name", "Current Price", "Spike Probability", "Trend"]
 
@@ -106,13 +105,25 @@ def run_predict(
 
         card = cache.get(tcg_id)
         pred_7d = pred_30d = trend = spike_prob = signal = ""
+        low7 = high7 = low30 = high30 = r_sq = ""
 
         if card:
             ph = card["price_history"]
-            p7 = forecast_card(ph, 7)
-            p30 = forecast_card(ph, 30)
-            pred_7d = f"{p7:.4f}" if p7 is not None else "insufficient_data"
-            pred_30d = f"{p30:.4f}" if p30 is not None else "insufficient_data"
+            fc7 = forecast_with_confidence(ph, 7)
+            fc30 = forecast_with_confidence(ph, 30)
+            if fc7:
+                pred_7d = f"{fc7['predicted']:.4f}"
+                low7 = f"{fc7['lower']:.4f}"
+                high7 = f"{fc7['upper']:.4f}"
+                r_sq = f"{fc7['r_squared']:.4f}"
+            else:
+                pred_7d = "insufficient_data"
+            if fc30:
+                pred_30d = f"{fc30['predicted']:.4f}"
+                low30 = f"{fc30['lower']:.4f}"
+                high30 = f"{fc30['upper']:.4f}"
+            else:
+                pred_30d = "insufficient_data"
             trend = trend_direction(ph)
             sp = spike_scores.get(tcg_id, 0.0)
             spike_prob = f"{sp:.4f}"
@@ -141,7 +152,12 @@ def run_predict(
             "Reason": reason,
             "Margin": margin,
             "Predicted 7d": pred_7d,
+            "7d Lower": low7,
+            "7d Upper": high7,
             "Predicted 30d": pred_30d,
+            "30d Lower": low30,
+            "30d Upper": high30,
+            "R-Squared": r_sq,
             "Trend": trend,
             "Spike Probability": spike_prob,
             "Signal": signal,
@@ -187,7 +203,9 @@ def _write_empty_outputs(output_dir: str) -> None:
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     pred_fields = ["TCGplayer Id", "Product Name", "Current Price", "Market Price",
                    "Suggested Price", "Action", "Reason", "Margin",
-                   "Predicted 7d", "Predicted 30d", "Trend", "Spike Probability", "Signal"]
+                   "Predicted 7d", "7d Lower", "7d Upper",
+                   "Predicted 30d", "30d Lower", "30d Upper",
+                   "R-Squared", "Trend", "Spike Probability", "Signal"]
     watch_fields = ["TCGplayer Id", "Product Name", "Current Price", "Spike Probability", "Trend"]
     for path, fields in [
         (os.path.join(output_dir, f"predictions-{timestamp}.csv"), pred_fields),
