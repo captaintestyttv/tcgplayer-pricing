@@ -1,0 +1,30 @@
+/* Minimal custom styles for TCGPlayer Pricing web UI */
+
+mark.lower { background-color: var(--pico-color-red-500); color: white; }
+mark.hold { background-color: var(--pico-color-amber-500); color: black; }
+mark.sell-now { background-color: var(--pico-color-red-700); color: white; }
+
+/* Sortable table headers */
+th[data-sort] { cursor: pointer; user-select: none; }
+th[data-sort]:hover { text-decoration: underline; }
+th.sort-asc::after { content: " \25B2"; }
+th.sort-desc::after { content: " \25BC"; }
+
+/* Compact tables */
+figure { overflow-x: auto; }
+
+/* Filter bar */
+#filter-signal, #filter-action {
+    display: inline-block;
+    width: auto;
+    margin-bottom: 0;
+}
+
+/* Job status card */
+#job-status article { margin-top: 1rem; }
+
+/* Dashboard grid action buttons */
+.grid button { margin-bottom: 0.5rem; }
+
+/* Chart containers */
+canvas { max-height: 400px; }

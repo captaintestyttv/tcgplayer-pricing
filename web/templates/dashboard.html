@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block title %}Dashboard - TCGPlayer Pricing{% endblock %}
+{% block content %}
+<h1>Dashboard</h1>
+
+<div class="grid">
+    <article>
+        <header>Inventory</header>
+        <p><strong>{{ stats.total_cards }}</strong> active cards</p>
+        <p>Market value: <strong>${{ "%.2f"|format(stats.total_market_value) }}</strong></p>
+        <p>Listed value: <strong>${{ "%.2f"|format(stats.total_list_value) }}</strong></p>
+        <p>History exports: {{ stats.history_exports }}</p>
+    </article>
+    <article>
+        <header>Predictions</header>
+        <p><strong>{{ stats.predictions_count }}</strong> cards scored</p>
+        {% if stats.actions %}
+        <p>
+            {% for action, count in stats.actions.items() %}
+            <mark>{{ action }}: {{ count }}</mark>&nbsp;
+            {% endfor %}
+        </p>
+        {% endif %}
+        {% if stats.signals %}
+        <p>
+            {% for signal, count in stats.signals.items() %}
+            <mark>{{ signal }}: {{ count }}</mark>&nbsp;
+            {% endfor %}
+        </p>
+        {% endif %}
+    </article>
+    <article>
+        <header>Model</header>
+        {% if stats.model_trained %}
+        <p>Trained: {{ stats.model_trained[:19] }}</p>
+        <p>Device: {{ stats.model_device }}</p>
+        {% if stats.model_auc %}
+        <p>AUC: {{ stats.model_auc }}</p>
+        {% endif %}
+        <p>Cache: {{ stats.cache_cards }} cards</p>
+        {% else %}
+        <p>No model trained yet.</p>
+        {% endif %}
+    </article>
+</div>
+
+<h2>Quick Actions</h2>
+<div class="grid">
+    <div>
+        <h3>Import CSV</h3>
+        <form id="import-form" enctype="multipart/form-data">
+            <input type="file" name="file" accept=".csv" required>
+            <button type="submit">Import</button>
+        </form>
+    </div>
+    <div>
+        <button class="outline" onclick="triggerJob('sync', {})">Sync MTGJson</button>
+        <button class="outline" onclick="triggerJob('sync', {cache_only: true})">Rebuild Cache</button>
+    </div>
+    <div>
+        <button class="outline" onclick="triggerJob('train')">Train Model</button>
+        <button class="outline" onclick="triggerJob('predict')">Run Predictions</button>
+        <button class="outline" onclick="triggerJob('backtest')">Run Backtest</button>
+    </div>
+</div>
+
+<div id="job-status" hidden>
+    <article>
+        <header>Job Status</header>
+        <p id="job-status-text"></p>
+        <progress id="job-progress"></progress>
+    </article>
+</div>
+{% endblock %}

@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}Backtest - TCGPlayer Pricing{% endblock %}
+{% block content %}
+<h1>Model Backtest</h1>
+
+{% if not backtest %}
+<p>No backtest results available. Run the backtest pipeline first.</p>
+{% else %}
+
+<div class="grid">
+    <article>
+        <header>Performance Metrics</header>
+        <p>Accuracy: <strong>{{ backtest.accuracy }}</strong></p>
+        <p>Precision: <strong>{{ backtest.precision }}</strong></p>
+        <p>Recall: <strong>{{ backtest.recall }}</strong></p>
+        <p>F1 Score: <strong>{{ backtest.f1 }}</strong></p>
+    </article>
+    <article>
+        <header>Dataset</header>
+        <p>Total Samples: {{ backtest.total_samples }}</p>
+        <p>Spike Count: {{ backtest.spike_count }}</p>
+        <p>Spike Rate: {{ "%.1f"|format(backtest.spike_rate * 100) }}%</p>
+        <p>Threshold: {{ backtest.threshold }}</p>
+    </article>
+    <article>
+        <header>Confusion Matrix</header>
+        {% set cm = backtest.confusion_matrix %}
+        <table>
+            <tr><td></td><td><strong>Pred +</strong></td><td><strong>Pred -</strong></td></tr>
+            <tr><td><strong>Actual +</strong></td><td>TP: {{ cm.tp }}</td><td>FN: {{ cm.fn }}</td></tr>
+            <tr><td><strong>Actual -</strong></td><td>FP: {{ cm.fp }}</td><td>TN: {{ cm.tn }}</td></tr>
+        </table>
+    </article>
+</div>
+
+{% if backtest.calibration_bins %}
+<h2>Probability Calibration</h2>
+<canvas id="calibration-chart"></canvas>
+<script>
+    window._calibrationData = {{ backtest.calibration_bins | tojson }};
+</script>
+{% endif %}
+
+{% if model_meta and model_meta.feature_importance %}
+<h2>Feature Importance</h2>
+<canvas id="feature-importance-chart"></canvas>
+<script>
+    window._featureImportance = {{ model_meta.feature_importance | tojson }};
+</script>
+{% endif %}
+
+<details>
+    <summary>Model Info</summary>
+    {% if model_meta %}
+    <p>Trained at: {{ model_meta.trained_at }}</p>
+    <p>Device: {{ model_meta.device }}</p>
+    <p>Training samples: {{ model_meta.train_samples }}</p>
+    <p>Spike rate: {{ model_meta.spike_rate }}</p>
+    {% if model_meta.hyperparameters %}
+    <p>Hyperparameters: {{ model_meta.hyperparameters }}</p>
+    {% endif %}
+    {% endif %}
+</details>
+
+{% endif %}
+{% endblock %}

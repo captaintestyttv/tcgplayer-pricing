@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}Watchlist - TCGPlayer Pricing{% endblock %}
+{% block content %}
+<h1>Watchlist <small>({{ watchlist|length }} HOLD cards)</small></h1>
+
+{% if not watchlist %}
+<p>No cards on the watchlist. Run predictions first, or no cards have spike probability >= 0.6.</p>
+{% else %}
+<figure>
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Current Price</th>
+            <th>Spike Probability</th>
+            <th>Trend</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for w in watchlist %}
+        <tr>
+            <td><a href="/card/{{ w['TCGplayer Id'] }}">{{ w['Product Name'][:50] }}</a></td>
+            <td>${{ w['Current Price'] }}</td>
+            <td><strong>{{ w['Spike Probability'] }}</strong></td>
+            <td>{{ w.Trend }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+</figure>
+{% endif %}
+{% endblock %}

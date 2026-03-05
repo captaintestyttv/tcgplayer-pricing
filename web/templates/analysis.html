@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+{% block title %}Analysis - TCGPlayer Pricing{% endblock %}
+{% block content %}
+<h1>Price Change Analysis</h1>
+
+{% if not analysis %}
+<p>No analysis data available. Import at least 2 exports and run analyze.</p>
+{% else %}
+
+{% if analysis.error %}
+<p>{{ analysis.error }}</p>
+{% else %}
+<p>Comparing: <code>{{ analysis.files_compared[0] }}</code> &rarr; <code>{{ analysis.files_compared[1] }}</code></p>
+<p>Generated: {{ analysis.timestamp[:19] }}</p>
+
+<div class="grid">
+    <article>
+        <header>Spikes Up (&gt;20%)</header>
+        <p style="font-size: 2rem;"><strong>{{ analysis.spikes_up }}</strong></p>
+    </article>
+    <article>
+        <header>Spikes Down (&gt;20%)</header>
+        <p style="font-size: 2rem;"><strong>{{ analysis.spikes_down }}</strong></p>
+    </article>
+    <article>
+        <header>Moderate Increases</header>
+        <p style="font-size: 2rem;"><strong>{{ analysis.increases }}</strong></p>
+    </article>
+    <article>
+        <header>Moderate Decreases</header>
+        <p style="font-size: 2rem;"><strong>{{ analysis.decreases }}</strong></p>
+    </article>
+    <article>
+        <header>Stable</header>
+        <p style="font-size: 2rem;"><strong>{{ analysis.stable }}</strong></p>
+    </article>
+</div>
+
+{% if analysis.spikes_up_details %}
+<h2>Top Spikes Up</h2>
+<figure>
+<table>
+    <thead>
+        <tr><th>Name</th><th>Previous</th><th>Current</th><th>Change</th></tr>
+    </thead>
+    <tbody>
+        {% for e in analysis.spikes_up_details %}
+        <tr>
+            <td><a href="/card/{{ e.id }}">{{ e.name }}</a></td>
+            <td>${{ "%.2f"|format(e.previous) }}</td>
+            <td>${{ "%.2f"|format(e.current) }}</td>
+            <td><mark>+{{ "%.0f"|format(e.change_pct) }}%</mark></td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+</figure>
+{% endif %}
+
+{% if analysis.spikes_down_details %}
+<h2>Top Drops</h2>
+<figure>
+<table>
+    <thead>
+        <tr><th>Name</th><th>Previous</th><th>Current</th><th>Change</th></tr>
+    </thead>
+    <tbody>
+        {% for e in analysis.spikes_down_details %}
+        <tr>
+            <td><a href="/card/{{ e.id }}">{{ e.name }}</a></td>
+            <td>${{ "%.2f"|format(e.previous) }}</td>
+            <td>${{ "%.2f"|format(e.current) }}</td>
+            <td><mark class="lower">{{ "%.0f"|format(e.change_pct) }}%</mark></td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+</figure>
+{% endif %}
+
+{% if analysis.increases_details %}
+<h2>Moderate Increases (5-20%)</h2>
+<figure>
+<table>
+    <thead>
+        <tr><th>Name</th><th>Previous</th><th>Current</th><th>Change</th></tr>
+    </thead>
+    <tbody>
+        {% for e in analysis.increases_details %}
+        <tr>
+            <td><a href="/card/{{ e.id }}">{{ e.name }}</a></td>
+            <td>${{ "%.2f"|format(e.previous) }}</td>
+            <td>${{ "%.2f"|format(e.current) }}</td>
+            <td>+{{ "%.1f"|format(e.change_pct) }}%</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+</figure>
+{% endif %}
+
+{% if analysis.decreases_details %}
+<h2>Moderate Decreases (5-20%)</h2>
+<figure>
+<table>
+    <thead>
+        <tr><th>Name</th><th>Previous</th><th>Current</th><th>Change</th></tr>
+    </thead>
+    <tbody>
+        {% for e in analysis.decreases_details %}
+        <tr>
+            <td><a href="/card/{{ e.id }}">{{ e.name }}</a></td>
+            <td>${{ "%.2f"|format(e.previous) }}</td>
+            <td>${{ "%.2f"|format(e.current) }}</td>
+            <td>{{ "%.1f"|format(e.change_pct) }}%</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+</figure>
+{% endif %}
+
+{% endif %}
+{% endif %}
+{% endblock %}
