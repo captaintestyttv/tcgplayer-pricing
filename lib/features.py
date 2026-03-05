@@ -4,8 +4,8 @@ import numpy as np
 from datetime import datetime
 
 from lib.config import (
-    RARITY_RANK, SPIKE_THRESHOLD, MIN_PRICE, SPOILER_WINDOW_DAYS,
-    RELEASE_PROXIMITY_MAX, get_logger,
+    RARITY_RANK, SPIKE_THRESHOLD, SPIKE_MIN_PRICE, MIN_PRICE,
+    SPOILER_WINDOW_DAYS, RELEASE_PROXIMITY_MAX, get_logger,
 )
 
 log = get_logger(__name__)
@@ -73,6 +73,24 @@ def extract_features(tcgplayer_id: str, card: dict, reference_date: datetime | N
 
     edhrec_rank = card.get("edhrecRank")
 
+    # Phase 6: derived price signals
+    if len(price_vals) >= 2:
+        last_30 = price_vals[-30:]
+        price_mean = sum(last_30) / len(last_30)
+        price_range_30d = (max(last_30) - min(last_30)) / max(price_mean, MIN_PRICE)
+    else:
+        price_range_30d = 0.0
+
+    days_since_last_change = 0
+    if len(price_vals) >= 2:
+        for j in range(len(price_vals) - 1, 0, -1):
+            if abs(price_vals[j] - price_vals[j - 1]) > 1e-6:
+                break
+            days_since_last_change += 1
+
+    set_card_count = card.get("set_card_count", 0)
+    price_percentile = card.get("price_percentile", 0.5)
+
     return {
         "tcgplayer_id": tcgplayer_id,
         # Original 7
@@ -107,6 +125,11 @@ def extract_features(tcgplayer_id: str, card: dict, reference_date: datetime | N
         # Phase 5: set release signals (2 features)
         "set_release_proximity": set_release_proximity,
         "spoiler_season": spoiler_season,
+        # Phase 6: derived signals (4 features)
+        "price_range_30d": price_range_30d,
+        "days_since_last_price_change": days_since_last_change,
+        "set_card_count": set_card_count,
+        "price_percentile": price_percentile,
     }
 
 
@@ -134,6 +157,17 @@ def compute_cluster_features(features_list: list[dict], cards: dict) -> None:
 def generate_training_data(cards: dict) -> list[dict]:
     """Generate (features, spike_label) rows from historical windows."""
     rows = []
+
+    # Compute per-set context: card counts and price percentiles
+    set_cards_map = {}
+    for tid, c in cards.items():
+        ps = sorted(c.get("price_history", {}).items())
+        if ps:
+            sc = c.get("setCode", "")
+            set_cards_map.setdefault(sc, []).append(float(ps[-1][1]))
+
+    set_card_counts = {s: len(ps) for s, ps in set_cards_map.items()}
+
     for tcgplayer_id, card in cards.items():
         prices = sorted(card.get("price_history", {}).items())
         price_vals = [float(v) for _, v in prices]
@@ -148,7 +182,8 @@ def generate_training_data(cards: dict) -> list[dict]:
         for i in range(len(price_vals) - 30):
             window = price_vals[i : i + 31]
             spike = int(
-                window[0] > 0 and (max(window[1:]) - window[0]) / window[0] > SPIKE_THRESHOLD
+                window[0] >= SPIKE_MIN_PRICE
+                and (max(window[1:]) - window[0]) / window[0] > SPIKE_THRESHOLD
             )
             snapshot = dict(card)
             snapshot["price_history"] = dict(prices[:i+1])
@@ -156,6 +191,16 @@ def generate_training_data(cards: dict) -> list[dict]:
             cutoff_date = prices[i][0]
             snapshot["foil_price_history"] = {d: v for d, v in foil if d <= cutoff_date}
             snapshot["buylist_price_history"] = {d: v for d, v in buylist if d <= cutoff_date}
+
+            set_code = card.get("setCode", "")
+            snapshot["set_card_count"] = set_card_counts.get(set_code, 0)
+            set_prices = set_cards_map.get(set_code, [])
+            if set_prices and window[0] > 0:
+                snapshot["price_percentile"] = sum(
+                    1 for p in set_prices if p <= window[0]
+                ) / len(set_prices)
+            else:
+                snapshot["price_percentile"] = 0.5
 
             ref_date = datetime.fromisoformat(cutoff_date)
             feat = extract_features(tcgplayer_id, snapshot, reference_date=ref_date)

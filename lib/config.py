@@ -42,9 +42,12 @@ SUGGESTED_DISCOUNT = 0.98      # Suggested price = market * this for RAISE
 # ---------------------------------------------------------------------------
 RARITY_RANK = {"common": 0, "uncommon": 1, "rare": 2, "mythic": 3}
 SPIKE_THRESHOLD = 0.20         # >20% increase in 30 days = spike
+SPIKE_MIN_PRICE = 0.25            # Ignore spikes below this starting price
 MIN_PRICE = 0.01               # Floor for all price values
 SPOILER_WINDOW_DAYS = 30       # Days before release to flag spoiler season
 RELEASE_PROXIMITY_MAX = 90     # Clamp set_release_proximity at this many days
+TRAINING_CACHE_FILENAME = "training_cards.json"  # Full-universe training cache
+TRAINING_CACHE_MAX_CARDS = 0       # 0 = no limit; set to e.g. 5000 for faster builds
 
 # ---------------------------------------------------------------------------
 # Forecasting
@@ -61,6 +64,7 @@ MAX_DEPTH = 4
 LEARNING_RATE = 0.1
 VALIDATION_SPLIT = 0.2             # Fraction of data held out for validation
 RANDOM_SEED = 42                   # Reproducible train/val split
+SAMPLE_WEIGHT_FEATURE = "current_price"  # Feature used for sample weighting
 
 # ---------------------------------------------------------------------------
 # Prediction Pipeline

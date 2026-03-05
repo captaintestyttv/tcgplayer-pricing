@@ -28,6 +28,9 @@ def test_extract_features_keys(cards):
         "recently_reprinted", "legality_changed",
         # Phase 5
         "set_release_proximity", "spoiler_season",
+        # Phase 6: derived signals
+        "price_range_30d", "days_since_last_price_change",
+        "set_card_count", "price_percentile",
     }
     assert expected_keys == set(feat.keys())
 
@@ -92,6 +95,11 @@ def test_extract_features_empty_price_history():
     # Phase 5 defaults
     assert feat["set_release_proximity"] == 90  # RELEASE_PROXIMITY_MAX
     assert feat["spoiler_season"] == 0
+    # Phase 6 defaults
+    assert feat["price_range_30d"] == 0.0
+    assert feat["days_since_last_price_change"] == 0
+    assert feat["set_card_count"] == 0
+    assert feat["price_percentile"] == pytest.approx(0.5)
 
 
 def test_extract_features_unknown_rarity():
@@ -227,6 +235,30 @@ def test_spoiler_season_from_proximity():
     assert feat["spoiler_season"] == 1  # 19 days out, within SPOILER_WINDOW_DAYS
 
 
+def test_spike_label_ignores_cheap_cards():
+    """Cards below SPIKE_MIN_PRICE should never be labeled as spikes."""
+    card = {
+        "rarity": "common", "printings": ["A"], "legalities": {},
+        "price_history": {f"2026-01-{i:02d}": 0.05 * (1.5 if i > 15 else 1.0) for i in range(1, 32)},
+        "foil_price_history": {}, "buylist_price_history": {},
+        "subtypes": [],
+    }
+    rows = generate_training_data({"1": card})
+    assert all(r["spike"] == 0 for r in rows), "Cheap card spikes should be filtered out"
+
+
+def test_spike_label_works_above_floor():
+    """Cards above SPIKE_MIN_PRICE should still get spike labels normally."""
+    card = {
+        "rarity": "rare", "printings": ["A"], "legalities": {},
+        "price_history": {f"2026-01-{i:02d}": (1.0 if i <= 15 else 1.5) for i in range(1, 32)},
+        "foil_price_history": {}, "buylist_price_history": {},
+        "subtypes": [],
+    }
+    rows = generate_training_data({"1": card})
+    assert any(r["spike"] == 1 for r in rows), "Above-floor spikes should be labeled"
+
+
 def test_reference_date_affects_set_age(cards):
     from datetime import datetime
     ref = datetime(2026, 3, 1)
@@ -234,3 +266,47 @@ def test_reference_date_affects_set_age(cards):
     # set_age_days = ref - first price date (2025-11-27)
     expected = (ref - datetime(2025, 11, 27)).days
     assert feat["set_age_days"] == expected
+
+
+# Phase 6 tests
+def test_price_range_30d_positive_for_volatile_card(cards):
+    feat = extract_features("111111", cards["111111"])
+    assert feat["price_range_30d"] > 0
+
+
+def test_price_range_30d_zero_for_flat_card():
+    card = {
+        "rarity": "common", "printings": ["A"], "legalities": {},
+        "price_history": {f"2026-01-{i:02d}": 1.0 for i in range(1, 32)},
+    }
+    feat = extract_features("1", card)
+    assert feat["price_range_30d"] == pytest.approx(0.0)
+
+
+def test_days_since_last_price_change(cards):
+    feat = extract_features("111111", cards["111111"])
+    assert feat["days_since_last_price_change"] <= 2
+
+
+def test_days_since_last_price_change_flat_card():
+    card = {
+        "rarity": "common", "printings": ["A"], "legalities": {},
+        "price_history": {f"2026-01-{i:02d}": 1.0 for i in range(1, 32)},
+    }
+    feat = extract_features("1", card)
+    assert feat["days_since_last_price_change"] == 30
+
+
+def test_set_card_count(cards):
+    feat = extract_features("111111", cards["111111"])
+    assert isinstance(feat["set_card_count"], int)
+
+
+def test_price_percentile_requires_context():
+    """Without set context, price_percentile defaults to 0.5."""
+    card = {
+        "rarity": "rare", "printings": ["A"], "legalities": {},
+        "price_history": {"2026-01-01": 5.0},
+    }
+    feat = extract_features("1", card)
+    assert feat["price_percentile"] == pytest.approx(0.5)

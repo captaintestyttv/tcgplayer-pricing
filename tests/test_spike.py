@@ -142,3 +142,29 @@ def test_score_raises_on_incompatible_model(cards, tmp_path):
 def test_check_compatibility_no_meta(tmp_path):
     """Old models without meta should be considered compatible."""
     assert check_model_compatibility(str(tmp_path / "no_such.json")) is True
+
+
+def test_train_records_sample_weighting(cards, tmp_path):
+    model_path = str(tmp_path / "model.json")
+    rows = generate_training_data(cards)
+    train(rows, model_path, device="cpu")
+    meta = load_model_meta(model_path)
+    assert "sample_weighting" in meta
+    assert meta["sample_weighting"] == "sqrt_current_price"
+
+
+def test_train_sample_weights_affect_importance(tmp_path):
+    """Higher-priced samples should influence the model more."""
+    rows = [
+        {col: 0.0 for col in FEATURE_COLS}
+        | {"spike": 0, "current_price": 10.0}
+        for _ in range(20)
+    ] + [
+        {col: 0.0 for col in FEATURE_COLS}
+        | {"spike": 1, "current_price": 10.0}
+        for _ in range(5)
+    ]
+    model_path = str(tmp_path / "model.json")
+    train(rows, model_path, device="cpu")
+    meta = load_model_meta(model_path)
+    assert meta["sample_weighting"] == "sqrt_current_price"

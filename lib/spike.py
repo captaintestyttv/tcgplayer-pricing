@@ -10,7 +10,7 @@ from sklearn.metrics import accuracy_score, roc_auc_score, precision_score, reca
 
 from lib.config import (
     N_ESTIMATORS, MAX_DEPTH, LEARNING_RATE, VALIDATION_SPLIT, RANDOM_SEED,
-    get_logger,
+    SAMPLE_WEIGHT_FEATURE, get_logger,
 )
 
 log = get_logger(__name__)
@@ -46,6 +46,11 @@ FEATURE_COLS = [
     # Phase 5: set release signals
     "set_release_proximity",
     "spoiler_season",
+    # Phase 6: derived signals
+    "price_range_30d",
+    "days_since_last_price_change",
+    "set_card_count",
+    "price_percentile",
 ]
 
 
@@ -57,6 +62,10 @@ def train(rows: list[dict], model_path: str, device: str = "cpu") -> None:
     df = pd.DataFrame(rows)
     X = df[FEATURE_COLS].fillna(0)
     y = df["spike"]
+
+    # Sample weights: sqrt(price) so high-value cards matter more
+    raw_weights = df[SAMPLE_WEIGHT_FEATURE].clip(lower=0.01)
+    sample_weights = np.sqrt(raw_weights)
 
     # Class imbalance: scale_pos_weight = #negative / #positive
     n_pos = int(y.sum())
@@ -81,7 +90,7 @@ def train(rows: list[dict], model_path: str, device: str = "cpu") -> None:
             eval_metric="logloss",
             verbosity=0,
         )
-        val_model.fit(X_train, y_train)
+        val_model.fit(X_train, y_train, sample_weight=sample_weights.iloc[train_idx])
         y_pred = val_model.predict(X_val)
         y_prob = val_model.predict_proba(X_val)[:, 1]
 
@@ -103,7 +112,7 @@ def train(rows: list[dict], model_path: str, device: str = "cpu") -> None:
         eval_metric="logloss",
         verbosity=0,
     )
-    model.fit(X, y)
+    model.fit(X, y, sample_weight=sample_weights)
     model.save_model(model_path)
 
     # Feature importance
@@ -121,6 +130,7 @@ def train(rows: list[dict], model_path: str, device: str = "cpu") -> None:
             "learning_rate": LEARNING_RATE,
             "scale_pos_weight": round(spw, 4),
         },
+        "sample_weighting": "sqrt_current_price",
         "spike_rate": float(y.mean()),
         "feature_cols": FEATURE_COLS,
         "feature_importance": sorted_imp,
@@ -166,6 +176,7 @@ def check_model_compatibility(model_path: str) -> bool:
     return meta["feature_cols"] == FEATURE_COLS
 
 
+# TODO: use CUDA for scoring when available (match training device detection)
 def score(features: list[dict], model_path: str) -> list[float]:
     """Return spike probability (0-1) for each feature dict.
 

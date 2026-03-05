@@ -65,7 +65,14 @@ def run_predict(
 
     if need_train:
         print("Training locally (CPU)...")
-        rows = generate_training_data(cache)
+        from lib.mtgjson import load_training_cache
+        training_cache = load_training_cache(data_dir)
+        train_source = training_cache if training_cache else cache
+        if training_cache:
+            print(f"Using full training cache ({len(training_cache)} cards)")
+        else:
+            print(f"No training cache found, using inventory cache ({len(cache)} cards)")
+        rows = generate_training_data(train_source)
         if rows:
             train(rows, model_path, device="cpu")
         else:

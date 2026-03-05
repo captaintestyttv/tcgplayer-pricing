@@ -4,6 +4,7 @@ import json
 import os
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, date
 from pathlib import Path
 
@@ -11,7 +12,7 @@ import requests
 
 from lib.config import (
     DOWNLOAD_TIMEOUT, DOWNLOAD_MAX_RETRIES, DOWNLOAD_BACKOFF_BASE,
-    SPOILER_WINDOW_DAYS, get_logger,
+    SPOILER_WINDOW_DAYS, TRAINING_CACHE_FILENAME, get_logger,
 )
 
 log = get_logger(__name__)
@@ -177,6 +178,96 @@ def build_inventory_cache(
     return cache
 
 
+def build_training_cache(
+    identifiers_data: dict,
+    prices_data: dict,
+    set_data: dict | None = None,
+    max_cards: int = 0,
+) -> dict:
+    """Build training cache from ALL cards with TCGPlayer retail prices.
+
+    Unlike build_inventory_cache (scoped to user's inventory via SKU mapping),
+    this iterates all UUIDs in AllPrices.json that have paper/tcgplayer/retail
+    data. Keyed by UUID (not TCGPlayer ID).
+    """
+    if set_data is None:
+        set_data = {}
+    cache = {}
+    count = 0
+
+    for uuid, price_channels in prices_data.items():
+        try:
+            normal = price_channels["paper"]["tcgplayer"]["retail"]["normal"]
+            price_history = {k: float(v) for k, v in normal.items()}
+        except (KeyError, TypeError):
+            continue
+
+        if not price_history:
+            continue
+
+        card = identifiers_data.get(uuid)
+        if not card:
+            continue
+
+        foil_price_history = {}
+        try:
+            foil = price_channels["paper"]["tcgplayer"]["retail"]["foil"]
+            foil_price_history = {k: float(v) for k, v in foil.items()}
+        except (KeyError, TypeError):
+            pass
+
+        buylist_price_history = {}
+        try:
+            buylist = price_channels["paper"]["tcgplayer"]["buylist"]["normal"]
+            buylist_price_history = {k: float(v) for k, v in buylist.items()}
+        except (KeyError, TypeError):
+            pass
+
+        set_code = card.get("setCode", "").upper()
+        cache[uuid] = {
+            "uuid": uuid,
+            "name": card.get("name", ""),
+            "rarity": card.get("rarity", ""),
+            "setCode": card.get("setCode", ""),
+            "printings": card.get("printings", []),
+            "legalities": {
+                k: v.lower() for k, v in card.get("legalities", {}).items()
+            },
+            "price_history": price_history,
+            "edhrecRank": card.get("edhrecRank"),
+            "edhrecSaltiness": card.get("edhrecSaltiness"),
+            "isReserved": card.get("isReserved", False),
+            "supertypes": card.get("supertypes", []),
+            "types": card.get("types", []),
+            "subtypes": card.get("subtypes", []),
+            "colorIdentity": card.get("colorIdentity", []),
+            "keywords": card.get("keywords", []),
+            "manaValue": card.get("manaValue", 0),
+            "text": card.get("text", ""),
+            "foil_price_history": foil_price_history,
+            "buylist_price_history": buylist_price_history,
+            "recently_reprinted": 0,
+            "legality_changed": 0,
+            "setReleaseDate": set_data.get(set_code, {}).get("releaseDate", ""),
+            "setIsPartialPreview": set_data.get(set_code, {}).get("isPartialPreview", False),
+        }
+
+        count += 1
+        if max_cards and count >= max_cards:
+            break
+
+    return cache
+
+
+def load_training_cache(data_dir: str) -> dict:
+    """Load the full-universe training cache."""
+    path = os.path.join(data_dir, TRAINING_CACHE_FILENAME)
+    if not os.path.exists(path):
+        return {}
+    with open(path) as f:
+        return json.load(f)
+
+
 def detect_changes(old_cache: dict, new_cache: dict) -> None:
     """Compare old and new caches, set change flags on new_cache in-place."""
     for tid, new_card in new_cache.items():
@@ -226,14 +317,16 @@ def sync(
                 return filename in files
             return force
 
-        download_json(f"{MTGJSON_BASE}/AllIdentifiers.json", identifiers_path,
-                      force=should_force("AllIdentifiers.json"))
-        download_json(f"{MTGJSON_BASE}/AllPrices.json", prices_path,
-                      force=should_force("AllPrices.json"))
-        download_json(f"{MTGJSON_BASE}/TcgplayerSkus.json", skus_path,
-                      force=should_force("TcgplayerSkus.json"))
-        download_json(f"{MTGJSON_BASE}/SetList.json", setlist_path,
-                      force=should_force("SetList.json"))
+        downloads = [
+            (f"{MTGJSON_BASE}/AllIdentifiers.json", identifiers_path, should_force("AllIdentifiers.json")),
+            (f"{MTGJSON_BASE}/AllPrices.json", prices_path, should_force("AllPrices.json")),
+            (f"{MTGJSON_BASE}/TcgplayerSkus.json", skus_path, should_force("TcgplayerSkus.json")),
+            (f"{MTGJSON_BASE}/SetList.json", setlist_path, should_force("SetList.json")),
+        ]
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            futures = {pool.submit(download_json, url, dest, f): dest for url, dest, f in downloads}
+            for future in as_completed(futures):
+                future.result()  # re-raises any download exception
 
     for path, label in [(identifiers_path, "AllIdentifiers.json"),
                         (prices_path, "AllPrices.json"),
@@ -248,9 +341,14 @@ def sync(
         print("No inventory IDs found in latest.csv -- run import first.")
         sys.exit(1)
 
-    identifiers_data = load_json_file(identifiers_path)["data"]
-    prices_data = load_json_file(prices_path)["data"]
-    skus_data = load_json_file(skus_path)["data"]
+    # Load JSON files in parallel (AllPrices + AllIdentifiers are ~650MB combined)
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        id_future = pool.submit(lambda: load_json_file(identifiers_path)["data"])
+        prices_future = pool.submit(lambda: load_json_file(prices_path)["data"])
+        skus_future = pool.submit(lambda: load_json_file(skus_path)["data"])
+        identifiers_data = id_future.result()
+        prices_data = prices_future.result()
+        skus_data = skus_future.result()
     sku_to_uuid = build_sku_to_uuid(skus_data)
 
     set_data = load_set_list(data_dir)
@@ -268,3 +366,15 @@ def sync(
     skipped = len(inventory_ids) - len(cache)
     if skipped:
         print(f"   {skipped} inventory IDs had no MTGJson match (sealed product, etc.)")
+
+    # Build full-universe training cache
+    from lib.config import TRAINING_CACHE_MAX_CARDS
+    print("Building training cache (all cards with TCGPlayer prices)...")
+    training_cache = build_training_cache(
+        identifiers_data, prices_data, set_data,
+        max_cards=TRAINING_CACHE_MAX_CARDS,
+    )
+    training_cache_path = os.path.join(data_dir, TRAINING_CACHE_FILENAME)
+    with open(training_cache_path, "w") as f:
+        json.dump(training_cache, f)
+    print(f"Training cache: {len(training_cache)} cards -> {training_cache_path}")
