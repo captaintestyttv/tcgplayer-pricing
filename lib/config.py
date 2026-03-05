@@ -50,6 +50,12 @@ TRAINING_CACHE_FILENAME = "training_cards.json"  # Full-universe training cache
 TRAINING_CACHE_MAX_CARDS = 0       # 0 = no limit; set to e.g. 5000 for faster builds
 
 # ---------------------------------------------------------------------------
+# Paths
+# ---------------------------------------------------------------------------
+DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
+PRICE_HISTORY_DIR = os.path.join(DATA_DIR, "price_history")
+
+# ---------------------------------------------------------------------------
 # Forecasting
 # ---------------------------------------------------------------------------
 MIN_HISTORY_DAYS = 14          # Minimum days of history for forecasting

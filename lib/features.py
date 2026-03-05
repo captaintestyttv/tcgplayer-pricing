@@ -7,6 +7,7 @@ from lib.config import (
     RARITY_RANK, SPIKE_THRESHOLD, SPIKE_MIN_PRICE, MIN_PRICE,
     SPOILER_WINDOW_DAYS, RELEASE_PROXIMITY_MAX, get_logger,
 )
+from lib.price_store import load_prices, merge_price_dicts
 
 log = get_logger(__name__)
 
@@ -154,9 +155,37 @@ def compute_cluster_features(features_list: list[dict], cards: dict) -> None:
             feat["cluster_momentum_7d"] = 0.0
 
 
+def enrich_with_accumulated_history(cards: dict) -> None:
+    """Replace each card's price histories with accumulated data from Parquet store (in-place).
+
+    Merges the cache's price_history with any deeper history stored in Parquet.
+    This gives training more sliding windows when history exceeds MTGJson's 90-day window.
+    """
+    price_fields = [
+        ("price_history", "normal"),
+        ("foil_price_history", "foil"),
+        ("buylist_price_history", "buylist"),
+    ]
+    enriched = 0
+    for card_id, card in cards.items():
+        for field, ptype in price_fields:
+            cache_prices = card.get(field, {})
+            stored_prices = load_prices(card_id, price_type=ptype)
+            if stored_prices:
+                merged = merge_price_dicts(stored_prices, cache_prices)
+                if len(merged) > len(cache_prices):
+                    card[field] = merged
+                    enriched += 1
+    if enriched:
+        log.info("Enriched %d price histories from Parquet store", enriched)
+
+
 def generate_training_data(cards: dict) -> list[dict]:
     """Generate (features, spike_label) rows from historical windows."""
     rows = []
+
+    # Enrich cards with accumulated price history from Parquet store
+    enrich_with_accumulated_history(cards)
 
     # Compute per-set context: card counts and price percentiles
     set_cards_map = {}

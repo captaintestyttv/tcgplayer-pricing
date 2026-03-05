@@ -9,7 +9,7 @@ from lib.config import (
     HIGH_VALUE_THRESHOLD, MIN_MARGIN, MARKET_UP_PCT, MARKET_DOWN_PCT,
     COMPETITIVE_PCT, SUGGESTED_DISCOUNT, MIN_PRICE, get_logger,
 )
-from lib.features import extract_features, generate_training_data, compute_cluster_features
+from lib.features import extract_features, generate_training_data, compute_cluster_features, enrich_with_accumulated_history
 from lib.forecast import forecast_card, forecast_with_confidence, trend_direction
 from lib.mtgjson import load_inventory_cache
 from lib.spike import FEATURE_COLS, score, train, load_model_meta, check_model_compatibility
@@ -78,6 +78,9 @@ def run_predict(
         else:
             print("Insufficient history for training. Spike scores will be 0.")
             model_path = None
+
+    # Enrich inventory cache with accumulated price history for scoring
+    enrich_with_accumulated_history(cache)
 
     spike_scores = {}
     if model_path and os.path.exists(model_path):

@@ -1,0 +1,179 @@
+generator client {
+  provider        = "prisma-client"
+  output          = "../src/generated/prisma"
+  previewFeatures = ["multiSchema"]
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ---------------------------------------------------------------------------
+// Cards — static metadata (~70k rows)
+// ---------------------------------------------------------------------------
+model Card {
+  uuid            String   @id
+  name            String
+  setCode         String?  @map("set_code")
+  rarity          String?
+  manaValue       Float?   @map("mana_value")
+  colorIdentity   String[] @map("color_identity")
+  types           String[]
+  subtypes        String[]
+  supertypes      String[]
+  keywords        String[]
+  legalities      Json?
+  edhrecRank      Int?     @map("edhrec_rank")
+  edhrecSaltiness Float?   @map("edhrec_saltiness")
+  isReserved      Boolean  @default(false) @map("is_reserved")
+  printings       String[]
+  setReleaseDate  DateTime? @map("set_release_date") @db.Date
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  tcgplayerIds    CardTcgplayerId[]
+  priceHistory    PriceHistory[]
+  predictions     Prediction[]
+
+  @@map("cards")
+}
+
+// ---------------------------------------------------------------------------
+// TCGPlayer ID mapping
+// ---------------------------------------------------------------------------
+model CardTcgplayerId {
+  tcgplayerId String @id @map("tcgplayer_id")
+  cardUuid    String @map("card_uuid")
+  skuId       String? @map("sku_id")
+
+  card Card @relation(fields: [cardUuid], references: [uuid])
+
+  @@map("card_tcgplayer_ids")
+}
+
+// ---------------------------------------------------------------------------
+// Price history — TimescaleDB hypertable (millions of rows)
+// ---------------------------------------------------------------------------
+model PriceHistory {
+  cardUuid  String   @map("card_uuid")
+  date      DateTime @db.Date
+  priceType String   @map("price_type")   // 'normal', 'foil', 'buylist'
+  source    String                         // 'mtgjson', 'mtggoldfish', 'tcgplayer_export'
+  price     Float
+
+  card Card @relation(fields: [cardUuid], references: [uuid])
+
+  @@id([cardUuid, date, priceType, source])
+  @@map("price_history")
+}
+
+// ---------------------------------------------------------------------------
+// User inventory (per-tenant)
+// ---------------------------------------------------------------------------
+model UserInventory {
+  userId      String   @map("user_id")
+  tcgplayerId String   @map("tcgplayer_id")
+  quantity    Int?
+  listedPrice Float?   @map("listed_price")
+  importedAt  DateTime @default(now()) @map("imported_at")
+
+  @@id([userId, tcgplayerId])
+  @@map("user_inventory")
+}
+
+// ---------------------------------------------------------------------------
+// Predictions (per run)
+// ---------------------------------------------------------------------------
+model Prediction {
+  id               Int      @id @default(autoincrement())
+  userId           String   @map("user_id")
+  tcgplayerId      String   @map("tcgplayer_id")
+  runAt            DateTime @map("run_at")
+  spikeProb        Float?   @map("spike_probability")
+  predicted7d      Float?   @map("predicted_7d")
+  predicted30d     Float?   @map("predicted_30d")
+  trend            String?
+  signal           String?
+  action           String?
+  suggestedPrice   Float?   @map("suggested_price")
+
+  cardUuid         String?  @map("card_uuid")
+  card             Card?    @relation(fields: [cardUuid], references: [uuid])
+
+  @@map("predictions")
+}
+
+// ---------------------------------------------------------------------------
+// Trained models
+// ---------------------------------------------------------------------------
+model Model {
+  id               Int      @id @default(autoincrement())
+  trainedAt        DateTime @map("trained_at")
+  numSamples       Int      @map("num_samples")
+  spikeRate        Float    @map("spike_rate")
+  featureCols      String[] @map("feature_cols")
+  valAccuracy      Float?   @map("val_accuracy")
+  valAuc           Float?   @map("val_auc")
+  valPrecision     Float?   @map("val_precision")
+  valRecall        Float?   @map("val_recall")
+  hyperparameters  Json?
+  featureImportance Json?   @map("feature_importance")
+  modelBlob        Bytes?   @map("model_blob")
+
+  @@map("models")
+}
+
+// ---------------------------------------------------------------------------
+// NextAuth models
+// ---------------------------------------------------------------------------
+model Account {
+  id                String  @id @default(cuid())
+  userId            String  @map("user_id")
+  type              String
+  provider          String
+  providerAccountId String  @map("provider_account_id")
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@map("accounts")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique @map("session_token")
+  userId       String   @map("user_id")
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String?   @unique
+  emailVerified DateTime? @map("email_verified")
+  image         String?
+
+  accounts Account[]
+  sessions Session[]
+
+  @@map("users")
+}
+
+model VerificationToken {
+  identifier String
+  token      String
+  expires    DateTime
+
+  @@unique([identifier, token])
+  @@map("verification_tokens")
+}

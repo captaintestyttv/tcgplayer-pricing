@@ -5,3 +5,4 @@ xgboost
 requests
 pytest
 flask
+pyarrow

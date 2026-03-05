@@ -14,6 +14,7 @@ from lib.config import (
     DOWNLOAD_TIMEOUT, DOWNLOAD_MAX_RETRIES, DOWNLOAD_BACKOFF_BASE,
     SPOILER_WINDOW_DAYS, TRAINING_CACHE_FILENAME, get_logger,
 )
+from lib.price_store import save_prices, load_prices, merge_price_dicts
 
 log = get_logger(__name__)
 
@@ -259,6 +260,28 @@ def build_training_cache(
     return cache
 
 
+def merge_cache_with_price_store(cache: dict, source: str = "mtgjson") -> None:
+    """Merge price history in cache with the Parquet price store (in-place).
+
+    For each card, loads accumulated history from Parquet, merges with
+    the new MTGJson prices, saves back to Parquet, and replaces the
+    card's price_history (and foil/buylist) with the full merged result.
+    """
+    price_types = [
+        ("price_history", "normal"),
+        ("foil_price_history", "foil"),
+        ("buylist_price_history", "buylist"),
+    ]
+    for card_id, card in cache.items():
+        for field, ptype in price_types:
+            new_prices = card.get(field, {})
+            old_prices = load_prices(card_id, price_type=ptype)
+            merged = merge_price_dicts(old_prices, new_prices)
+            if new_prices:
+                save_prices(card_id, new_prices, source=source, price_type=ptype)
+            card[field] = merged
+
+
 def load_training_cache(data_dir: str) -> dict:
     """Load the full-universe training cache."""
     path = os.path.join(data_dir, TRAINING_CACHE_FILENAME)
@@ -358,6 +381,10 @@ def sync(
     if old_cache:
         detect_changes(old_cache, cache)
 
+    # Merge with accumulated price history (Parquet store)
+    print("Merging with accumulated price history...")
+    merge_cache_with_price_store(cache, source="mtgjson")
+
     cache_path = os.path.join(data_dir, CACHE_FILENAME)
     with open(cache_path, "w") as f:
         json.dump(cache, f, indent=2)
@@ -374,6 +401,11 @@ def sync(
         identifiers_data, prices_data, set_data,
         max_cards=TRAINING_CACHE_MAX_CARDS,
     )
+
+    # Merge training cache with accumulated price history
+    print("Merging training cache with accumulated price history...")
+    merge_cache_with_price_store(training_cache, source="mtgjson")
+
     training_cache_path = os.path.join(data_dir, TRAINING_CACHE_FILENAME)
     with open(training_cache_path, "w") as f:
         json.dump(training_cache, f)
