@@ -9,8 +9,9 @@ TCGPlayer price monitoring and predictive pricing tool for Magic: The Gathering 
 ## Commands
 
 ```bash
-# Import a new TCGPlayer export (auto-runs analysis)
-bash scripts/monitor.sh import tcgplayer-exports/<file>.csv
+# Import a new TCGPlayer export (auto-detects CSV in tcgplayer-exports/)
+bash scripts/monitor.sh import
+bash scripts/monitor.sh import tcgplayer-exports/<file>.csv  # or specify explicitly
 
 # Analyze price changes between last two exports
 bash scripts/monitor.sh analyze
@@ -45,13 +46,23 @@ bash scripts/monitor.sh backtest
 
 ```bash
 # Run the full test suite (80 tests)
-python3 -m pytest tests/ -v
+python -m pytest tests/ -v
 
 # Run a single test file
-python3 -m pytest tests/test_features.py -v
+python -m pytest tests/test_features.py -v
 ```
 
 Dependencies: `pip install -r requirements.txt` (pandas, numpy, scikit-learn, xgboost, requests, pytest)
+
+## Platform Notes
+
+Developed on Windows 11 with Git Bash (MSYS2) and Python via conda. The conda environment is named `tcgplayer`. Activate it with:
+
+```bash
+conda activate tcgplayer
+```
+
+`monitor.sh` auto-detects the Python command (`python3` on Linux/macOS, `python` on Windows/conda). All bash commands should be run through Git Bash on Windows.
 
 ## Architecture
 
