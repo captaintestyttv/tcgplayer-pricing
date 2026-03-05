@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}Predictions - TCGPlayer Pricing{% endblock %}
+{% block content %}
+<h1>Predictions <small>({{ predictions|length }} cards)</small></h1>
+
+{% if not predictions %}
+<p>No predictions available. Run the predict pipeline first.</p>
+{% else %}
+<div style="margin-bottom: 1rem;">
+    <label for="filter-signal">Filter by Signal:</label>
+    <select id="filter-signal" onchange="filterTable()">
+        <option value="">All</option>
+        <option value="HOLD">HOLD</option>
+        <option value="SELL_NOW">SELL_NOW</option>
+    </select>
+    <label for="filter-action" style="margin-left: 1rem;">Action:</label>
+    <select id="filter-action" onchange="filterTable()">
+        <option value="">All</option>
+        <option value="RAISE">RAISE</option>
+        <option value="LOWER">LOWER</option>
+    </select>
+    <input type="search" id="filter-name" placeholder="Search by name..." oninput="filterTable()" style="margin-left: 1rem; display: inline-block; width: 250px;">
+</div>
+
+<figure>
+<table class="sortable" id="predictions-table">
+    <thead>
+        <tr>
+            <th data-sort="string" onclick="sortTable(this, 0)">Name</th>
+            <th data-sort="number" onclick="sortTable(this, 1)">Current</th>
+            <th data-sort="number" onclick="sortTable(this, 2)">Market</th>
+            <th data-sort="string" onclick="sortTable(this, 3)">Action</th>
+            <th data-sort="number" onclick="sortTable(this, 4)">Suggested</th>
+            <th data-sort="number" onclick="sortTable(this, 5)">Margin</th>
+            <th data-sort="string" onclick="sortTable(this, 6)">Trend</th>
+            <th data-sort="number" onclick="sortTable(this, 7)">Spike Prob</th>
+            <th data-sort="string" onclick="sortTable(this, 8)">Signal</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for p in predictions %}
+        <tr data-signal="{{ p.Signal }}" data-action="{{ p.Action }}" data-name="{{ p['Product Name']|lower }}">
+            <td><a href="/card/{{ p['TCGplayer Id'] }}">{{ p['Product Name'][:50] }}</a></td>
+            <td>${{ p['Current Price'] }}</td>
+            <td>${{ p['Market Price'] }}</td>
+            <td>
+                {% if p.Action == 'RAISE' %}<mark>RAISE</mark>
+                {% elif p.Action == 'LOWER' %}<mark class="lower">LOWER</mark>
+                {% endif %}
+            </td>
+            <td>${{ p['Suggested Price'] }}</td>
+            <td>${{ p.Margin }}</td>
+            <td>{{ p.Trend }}</td>
+            <td>{{ p['Spike Probability'] }}</td>
+            <td>
+                {% if p.Signal == 'HOLD' %}<mark class="hold">HOLD</mark>
+                {% elif p.Signal == 'SELL_NOW' %}<mark class="sell-now">SELL_NOW</mark>
+                {% endif %}
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+</figure>
+{% endif %}
+{% endblock %}

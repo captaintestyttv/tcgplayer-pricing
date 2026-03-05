@@ -57,7 +57,9 @@ def test_predictions_csv_has_required_columns(setup_dirs):
     expected_cols = {
         "TCGplayer Id", "Product Name", "Current Price", "Market Price",
         "Suggested Price", "Action", "Reason", "Margin",
-        "Predicted 7d", "Predicted 30d", "Trend", "Spike Probability", "Signal",
+        "Predicted 7d", "7d Lower", "7d Upper",
+        "Predicted 30d", "30d Lower", "30d Upper",
+        "R-Squared", "Trend", "Spike Probability", "Signal",
     }
     assert expected_cols.issubset(set(reader.fieldnames))
 
@@ -80,3 +82,30 @@ def test_watchlist_only_contains_high_spike_probability(setup_dirs):
         rows = list(csv.DictReader(f))
     for row in rows:
         assert float(row["Spike Probability"]) >= 0.6
+
+
+def test_empty_cache_writes_empty_outputs(tmp_path):
+    """When no MTGJson cache exists, predict writes header-only CSVs."""
+    history_dir = tmp_path / "history"
+    data_dir = tmp_path / "data" / "mtgjson"
+    models_dir = tmp_path / "models"
+    output_dir = tmp_path / "output"
+    for d in [history_dir, data_dir, models_dir, output_dir]:
+        d.mkdir(parents=True)
+    (history_dir / "latest.csv").write_text(
+        "TCGplayer Id,Product Name,TCG Market Price,TCG Marketplace Price,Total Quantity\n"
+        "111111,Test,1.00,1.00,1\n"
+    )
+    run_predict(str(history_dir), str(data_dir), str(models_dir), str(output_dir))
+    pred_files = list(output_dir.glob("predictions-*.csv"))
+    assert len(pred_files) == 1
+    with open(pred_files[0]) as f:
+        rows = list(csv.DictReader(f))
+    assert len(rows) == 0  # header only
+
+
+def test_dry_run_does_not_write_files(setup_dirs):
+    run_predict(**setup_dirs, dry_run=True)
+    output = Path(setup_dirs["output_dir"])
+    assert len(list(output.glob("predictions-*.csv"))) == 0
+    assert len(list(output.glob("watchlist-*.csv"))) == 0

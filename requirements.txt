@@ -4,3 +4,5 @@ scikit-learn
 xgboost
 requests
 pytest
+flask
+pyarrow

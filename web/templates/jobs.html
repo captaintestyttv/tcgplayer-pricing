@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}Jobs - TCGPlayer Pricing{% endblock %}
+{% block content %}
+<h1>Background Jobs</h1>
+
+<div style="margin-bottom: 1rem;">
+    <button class="outline" onclick="refreshJobs()">Refresh</button>
+</div>
+
+{% if not jobs %}
+<p>No jobs have been run yet.</p>
+{% else %}
+<figure>
+<table id="jobs-table">
+    <thead>
+        <tr>
+            <th>ID</th>
+            <th>Type</th>
+            <th>Status</th>
+            <th>Started</th>
+            <th>Finished</th>
+            <th>Details</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for j in jobs %}
+        <tr>
+            <td><code>{{ j.id }}</code></td>
+            <td>{{ j.type }}</td>
+            <td>
+                {% if j.status == 'running' %}<mark>running</mark>
+                {% elif j.status == 'completed' %}<ins>completed</ins>
+                {% elif j.status == 'failed' %}<del>failed</del>
+                {% endif %}
+            </td>
+            <td>{{ j.started_at[:19] }}</td>
+            <td>{{ j.finished_at[:19] if j.finished_at else '-' }}</td>
+            <td><button class="outline secondary" onclick="showJobLog('{{ j.id }}')">Log</button></td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+</figure>
+{% endif %}
+
+<dialog id="job-log-dialog">
+    <article>
+        <header>
+            <button aria-label="Close" rel="prev" onclick="document.getElementById('job-log-dialog').close()"></button>
+            <p>Job Log</p>
+        </header>
+        <pre id="job-log-content" style="max-height: 400px; overflow-y: auto;"></pre>
+        <footer>
+            <p id="job-log-error" style="color: var(--pico-color-red-500);"></p>
+        </footer>
+    </article>
+</dialog>
+{% endblock %}

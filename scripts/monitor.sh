@@ -15,6 +15,7 @@
 #   monitor.sh sync --skus                 # Re-download TcgplayerSkus.json only
 #   monitor.sh train [--remote <host>]     # Train spike classifier
 #   monitor.sh predict                     # Run predictions + recommendations
+#   monitor.sh predict --dry-run           # Preview predictions without writing files
 # =============================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -25,6 +26,16 @@ DATA_DIR="${PRICING_DIR}/data/mtgjson"
 MODELS_DIR="${PRICING_DIR}/models"
 
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+
+# Detect Python command (python3 on Linux/macOS, python on Windows/conda)
+if command -v python3 &>/dev/null; then
+    PYTHON=python3
+elif command -v python &>/dev/null; then
+    PYTHON=python
+else
+    echo "Error: Python not found. Install Python 3 and ensure it's on PATH."
+    exit 1
+fi
 
 # Fees
 COMMISSION_FEE=0.1075
@@ -38,16 +49,49 @@ POSTAGE_STANDARD=0.73
 # =============================================================================
 import_data() {
     local input_file="$1"
+
+    # Auto-detect: if no file given, look for a CSV in tcgplayer-exports/
     if [[ -z "$input_file" ]]; then
-        echo "Usage: $0 import <export.csv>"
-        return 1
+        local exports_dir="${PRICING_DIR}/tcgplayer-exports"
+        local csv_files=("${exports_dir}"/*.csv)
+        if [[ ! -e "${csv_files[0]}" ]]; then
+            echo "Error: No CSV files found in tcgplayer-exports/"
+            echo "Usage: $0 import [<export.csv>]"
+            return 1
+        elif [[ ${#csv_files[@]} -gt 1 ]]; then
+            echo "Error: Multiple CSV files found in tcgplayer-exports/:"
+            printf '  %s\n' "${csv_files[@]}"
+            echo "Please specify which file or remove extras."
+            return 1
+        fi
+        input_file="${csv_files[0]}"
+        echo "Auto-detected export: $(basename "$input_file")"
     fi
-    
+
     if [[ ! -f "$input_file" ]]; then
         echo "Error: File not found: $input_file"
         return 1
     fi
-    
+
+    # Validate CSV has required columns
+    $PYTHON - "$input_file" <<'PYEOF'
+import csv, sys
+required = ["TCGplayer Id", "Product Name", "TCG Market Price", "TCG Marketplace Price", "Total Quantity"]
+with open(sys.argv[1], newline="") as f:
+    reader = csv.DictReader(f)
+    if reader.fieldnames is None:
+        print("Error: CSV file is empty or has no header row."); sys.exit(1)
+    missing = [c for c in required if c not in reader.fieldnames]
+    if missing:
+        print(f"Error: CSV is missing required columns: {', '.join(missing)}"); sys.exit(1)
+    first_row = next(reader, None)
+    if first_row is None:
+        print("Error: CSV has a header but no data rows."); sys.exit(1)
+PYEOF
+    if [[ $? -ne 0 ]]; then
+        return 1
+    fi
+
     # Copy to history with timestamp
     cp "$input_file" "${HISTORY_DIR}/export-${TIMESTAMP}.csv"
     
@@ -68,14 +112,16 @@ analyze_changes() {
     echo ""
     echo "=== Price Analysis ==="
     
-    python3 << PYEOF
+    $PYTHON - "${HISTORY_DIR}" "${OUTPUT_DIR}" <<'PYEOF'
 import csv
 import os
 import json
+import sys
 from datetime import datetime
 
-HISTORY_DIR = "${HISTORY_DIR}"
-OUTPUT_DIR = "${OUTPUT_DIR}"
+HISTORY_DIR = sys.argv[1]
+OUTPUT_DIR = sys.argv[2]
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # Find all history files
 files = sorted([f for f in os.listdir(HISTORY_DIR) if f.startswith('export-') and f.endswith('.csv')])
@@ -183,14 +229,16 @@ generate_recommendations() {
     echo ""
     echo "=== Pricing Recommendations ==="
     
-    python3 << PYEOF
+    $PYTHON - "${HISTORY_DIR}" "${OUTPUT_DIR}" <<'PYEOF'
 import csv
 import json
 import os
+import sys
 from datetime import datetime
 
-HISTORY_DIR = "${HISTORY_DIR}"
-OUTPUT_DIR = "${OUTPUT_DIR}"
+HISTORY_DIR = sys.argv[1]
+OUTPUT_DIR = sys.argv[2]
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # Find history files
 files = sorted([f for f in os.listdir(HISTORY_DIR) if f.startswith('export-') and f.endswith('.csv')])
@@ -313,19 +361,20 @@ sync_data() {
         case "$1" in
             --force)       force=True ;;
             --cache)       cache_only=True ;;
-            --prices)      files="['AllPrices.json']" ;;
-            --identifiers) files="['AllIdentifiers.json']" ;;
-            --skus)        files="['TcgplayerSkus.json']" ;;
+            --prices)      files='["AllPrices.json"]' ;;
+            --identifiers) files='["AllIdentifiers.json"]' ;;
+            --skus)        files='["TcgplayerSkus.json"]' ;;
             *) echo "Unknown sync option: $1"; exit 1 ;;
         esac
         shift
     done
 
-    python3 - <<PYEOF
-import sys
-sys.path.insert(0, "${PRICING_DIR}")
+    $PYTHON - "${PRICING_DIR}" "${HISTORY_DIR}" "${DATA_DIR}" "${force}" "${cache_only}" "${files}" <<'PYEOF'
+import sys, json
+sys.path.insert(0, sys.argv[1])
 from lib.mtgjson import sync
-sync("${HISTORY_DIR}", "${DATA_DIR}", force=${force}, cache_only=${cache_only}, files=${files})
+files = json.loads(sys.argv[6]) if sys.argv[6] != "None" else None
+sync(sys.argv[2], sys.argv[3], force=sys.argv[4]=="True", cache_only=sys.argv[5]=="True", files=files)
 PYEOF
 }
 
@@ -336,13 +385,15 @@ train_model() {
     local remote_host="${1:-}"
 
     if [[ -z "$remote_host" ]]; then
-        python3 - <<PYEOF
-import sys, json
-sys.path.insert(0, "${PRICING_DIR}")
+        $PYTHON - "${PRICING_DIR}" "${DATA_DIR}" "${MODELS_DIR}" <<'PYEOF'
+import sys, json, os
+sys.path.insert(0, sys.argv[1])
 from lib.mtgjson import load_inventory_cache
 from lib.features import generate_training_data
 from lib.spike import train
-import os
+
+DATA_DIR = sys.argv[2]
+MODELS_DIR = sys.argv[3]
 
 try:
     import xgboost as xgb
@@ -353,30 +404,40 @@ except Exception:
 
 print(f"Training locally ({device.upper()})...")
 
-cache = load_inventory_cache("${DATA_DIR}")
+cache = load_inventory_cache(DATA_DIR)
 if not cache:
     print("No MTGJson cache found. Run 'monitor.sh sync' first.")
     sys.exit(1)
+
+from lib.mtgjson import load_training_cache
+training_cache = load_training_cache(DATA_DIR)
+if training_cache:
+    print(f"Using full training cache ({len(training_cache)} cards)")
+    cache = training_cache
 
 rows = generate_training_data(cache)
 if not rows:
     print("Insufficient price history for training.")
     sys.exit(1)
 
-os.makedirs("${MODELS_DIR}", exist_ok=True)
-train(rows, "${MODELS_DIR}/spike_classifier.json", device=device)
+os.makedirs(MODELS_DIR, exist_ok=True)
+train(rows, f"{MODELS_DIR}/spike_classifier.json", device=device)
 PYEOF
     else
         echo "Training remotely on ${remote_host} (GPU)..."
         REMOTE_TMP="/tmp/tcgplayer_train"
 
-        python3 - <<PYEOF
+        $PYTHON - "${PRICING_DIR}" "${DATA_DIR}" <<'PYEOF'
 import sys, json, os
-sys.path.insert(0, "${PRICING_DIR}")
-from lib.mtgjson import load_inventory_cache
+sys.path.insert(0, sys.argv[1])
+from lib.mtgjson import load_inventory_cache, load_training_cache
 from lib.features import generate_training_data
 
-cache = load_inventory_cache("${DATA_DIR}")
+cache = load_inventory_cache(sys.argv[2])
+training_cache = load_training_cache(sys.argv[2])
+if training_cache:
+    print(f"Using full training cache ({len(training_cache)} cards)")
+    cache = training_cache
 rows = generate_training_data(cache)
 os.makedirs("/tmp/tcgplayer_train", exist_ok=True)
 with open("/tmp/tcgplayer_train/features.json", "w") as f:
@@ -401,7 +462,9 @@ PYEOF
 
         mkdir -p "${MODELS_DIR}"
         scp "${remote_host}:${REMOTE_TMP}/spike_classifier.json" "${MODELS_DIR}/"
+        scp "${remote_host}:${REMOTE_TMP}/spike_classifier_meta.json" "${MODELS_DIR}/" 2>/dev/null
         echo "✅ Model retrieved from ${remote_host}"
+        rm -rf /tmp/tcgplayer_train
     fi
 }
 
@@ -409,15 +472,33 @@ PYEOF
 # Run predictions
 # =============================================================================
 run_predict() {
-    python3 - <<PYEOF
+    local dry_run="${1:-}"
+    $PYTHON - "${PRICING_DIR}" "${HISTORY_DIR}" "${DATA_DIR}" "${MODELS_DIR}" "${OUTPUT_DIR}" "$dry_run" <<'PYEOF'
 import sys
-sys.path.insert(0, "${PRICING_DIR}")
+sys.path.insert(0, sys.argv[1])
 from lib.predict import run_predict
 run_predict(
-    history_dir="${HISTORY_DIR}",
-    data_dir="${DATA_DIR}",
-    models_dir="${MODELS_DIR}",
-    output_dir="${OUTPUT_DIR}",
+    history_dir=sys.argv[2],
+    data_dir=sys.argv[3],
+    models_dir=sys.argv[4],
+    output_dir=sys.argv[5],
+    dry_run=(sys.argv[6] == "--dry-run") if len(sys.argv) > 6 and sys.argv[6] else False,
+)
+PYEOF
+}
+
+# =============================================================================
+# Run backtest
+# =============================================================================
+run_backtest() {
+    $PYTHON - "${PRICING_DIR}" "${DATA_DIR}" "${MODELS_DIR}" "${OUTPUT_DIR}" <<'PYEOF'
+import sys
+sys.path.insert(0, sys.argv[1])
+from lib.backtest import run_backtest
+run_backtest(
+    data_dir=sys.argv[2],
+    models_dir=sys.argv[3],
+    output_dir=sys.argv[4],
 )
 PYEOF
 }
@@ -427,7 +508,7 @@ PYEOF
 # =============================================================================
 case "${1:-}" in
     import)
-        import_data "$2"
+        import_data "${2:-}"
         ;;
     analyze)
         analyze_changes
@@ -450,7 +531,14 @@ case "${1:-}" in
         fi
         ;;
     predict)
-        run_predict
+        run_predict "${2:-}"
+        ;;
+    backtest)
+        run_backtest
+        ;;
+    web)
+        echo "Starting web UI on http://127.0.0.1:5000 ..."
+        $PYTHON "${PRICING_DIR}/web/app.py"
         ;;
     *)
         echo "TCGPlayer Price Monitor"
@@ -464,6 +552,8 @@ case "${1:-}" in
         echo "  baseline                   Set current data as baseline"
         echo "  sync                       Download MTGJson data"
         echo "  train [--remote <host>]    Train spike classifier"
-        echo "  predict                    Run predictions + recommendations"
+        echo "  predict [--dry-run]        Run predictions + recommendations"
+        echo "  backtest                   Evaluate model against historical data"
+        echo "  web                        Start local web UI"
         ;;
 esac

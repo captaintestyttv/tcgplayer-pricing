@@ -1,0 +1,31 @@
+services:
+  db:
+    image: timescale/timescaledb:latest-pg16
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: tcgplayer
+      POSTGRES_PASSWORD: tcgplayer
+      POSTGRES_DB: tcgplayer
+    volumes:
+      - pgdata:/home/postgres/pgdata/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tcgplayer"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  ml-service:
+    build:
+      context: ..
+      dockerfile: ml-service/Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql://tcgplayer:tcgplayer@db:5432/tcgplayer
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:

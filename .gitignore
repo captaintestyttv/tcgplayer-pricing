@@ -11,3 +11,9 @@ data/mtgjson/AllPrices.json
 data/mtgjson/AllIdentifiers.json
 data/mtgjson/TcgplayerSkus.json
 models/
+
+# Python cache
+__pycache__/
+
+# Local conda environment
+.conda/

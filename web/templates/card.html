@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block title %}{{ card.name if card else 'Card Not Found' }} - TCGPlayer Pricing{% endblock %}
+{% block content %}
+{% if not card %}
+<h1>Card Not Found</h1>
+<p>No data for TCGplayer ID <code>{{ tcg_id }}</code>.</p>
+{% else %}
+<h1>{{ card.name }}</h1>
+
+<div class="grid">
+    <article>
+        <header>Pricing</header>
+        <p>Market Price: <strong>${{ "%.2f"|format(card.market_price) }}</strong></p>
+        <p>Listed Price: ${{ "%.2f"|format(card.list_price) }}</p>
+        <p>Quantity: {{ card.quantity }}</p>
+        {% if card.prediction %}
+        <p>Suggested: ${{ card.prediction['Suggested Price'] }}</p>
+        <p>Action: <mark>{{ card.prediction.Action }}</mark></p>
+        {% if card.prediction.Signal %}
+        <p>Signal: <mark class="{{ 'hold' if card.prediction.Signal == 'HOLD' else 'sell-now' }}">{{ card.prediction.Signal }}</mark></p>
+        {% endif %}
+        {% endif %}
+    </article>
+    <article>
+        <header>Card Details</header>
+        <p>Set: {{ card.set_name }}{% if card.set_code %} ({{ card.set_code }}){% endif %}</p>
+        <p>Rarity: {{ card.rarity }}</p>
+        {% if card.types %}<p>Type: {{ card.types|join(' ') }}{% if card.subtypes %} &mdash; {{ card.subtypes|join(' ') }}{% endif %}</p>{% endif %}
+        {% if card.color_identity %}<p>Colors: {{ card.color_identity|join(', ') }}</p>{% endif %}
+        {% if card.mana_value %}<p>Mana Value: {{ card.mana_value }}</p>{% endif %}
+        {% if card.keywords %}<p>Keywords: {{ card.keywords|join(', ') }}</p>{% endif %}
+    </article>
+    <article>
+        <header>Forecast</header>
+        {% if card.prediction %}
+        <p>7-day: ${{ card.prediction['Predicted 7d'] }}
+            {% if card.prediction['7d Lower'] %}
+            <small>(${{ card.prediction['7d Lower'] }} &ndash; ${{ card.prediction['7d Upper'] }})</small>
+            {% endif %}
+        </p>
+        <p>30-day: ${{ card.prediction['Predicted 30d'] }}
+            {% if card.prediction['30d Lower'] %}
+            <small>(${{ card.prediction['30d Lower'] }} &ndash; ${{ card.prediction['30d Upper'] }})</small>
+            {% endif %}
+        </p>
+        <p>Trend: {{ card.prediction.Trend }}</p>
+        <p>Spike Probability: {{ card.prediction['Spike Probability'] }}</p>
+        {% if card.prediction['R-Squared'] %}<p>R&sup2;: {{ card.prediction['R-Squared'] }}</p>{% endif %}
+        {% else %}
+        <p>No predictions available.</p>
+        {% endif %}
+    </article>
+</div>
+
+{% if card.text %}
+<article>
+    <header>Oracle Text</header>
+    <p>{{ card.text }}</p>
+</article>
+{% endif %}
+
+{% if card.legalities %}
+<details>
+    <summary>Format Legalities</summary>
+    <p>
+    {% for fmt, status in card.legalities.items() %}
+        <small>{{ fmt }}: {{ status }}</small>&nbsp;
+    {% endfor %}
+    </p>
+</details>
+{% endif %}
+
+<h2>Price History</h2>
+<canvas id="price-chart" data-tcg-id="{{ tcg_id }}"></canvas>
+{% endif %}
+{% endblock %}
