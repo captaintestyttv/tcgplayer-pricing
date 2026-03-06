@@ -492,3 +492,17 @@ def test_trend_strength_matches_after_optimization():
     card3 = {"rarity": "rare", "printings": [], "legalities": {}, "price_history": history3}
     feat3 = extract_features("1", card3)
     assert feat3["trend_strength"] == pytest.approx(0.0, abs=1e-6)
+
+
+def test_generate_training_data_output_unchanged(cards):
+    """Verify refactored generate_training_data produces identical output."""
+    rows = generate_training_data(cards)
+    assert len(rows) > 0
+    assert all("spike" in r for r in rows)
+    assert all("tcgplayer_id" in r for r in rows)
+    from lib.spike import FEATURE_COLS
+    for r in rows:
+        for col in FEATURE_COLS:
+            assert col in r, f"Missing {col}"
+    for r in rows:
+        assert "_reference_date" not in r
