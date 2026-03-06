@@ -15,6 +15,7 @@ import json
 import os
 import sys
 import time
+import urllib.parse
 
 import requests
 
@@ -80,10 +81,10 @@ def download_goldfish_csv(
     """Download a single card's price history CSV from MTGGoldfish.
 
     Returns the path to the saved CSV, or None on failure.
+    URL format: /price-download/paper/{CardName+[SET]}  (quote_plus encoded)
     """
-    # MTGGoldfish URL format: /price/Paper/{CardName}/{SetName}/download
-    card_slug = card_name.replace(" ", "+").replace("'", "")
-    url = f"{GOLDFISH_BASE}/price/Paper/{card_slug}/{set_name}/download"
+    encoded = urllib.parse.quote_plus(f"{card_name} [{set_name}]")
+    url = f"{GOLDFISH_BASE}/price-download/paper/{encoded}"
 
     headers = {
         "Cookie": session_cookie,
@@ -91,16 +92,21 @@ def download_goldfish_csv(
     }
 
     try:
-        resp = requests.get(url, headers=headers, timeout=30)
+        resp = requests.get(url, headers=headers, timeout=30, allow_redirects=True)
         if resp.status_code == 404:
             log.warning("Not found: %s [%s]", card_name, set_name)
             return None
         resp.raise_for_status()
 
-        if "text/csv" not in resp.headers.get("Content-Type", "") and \
-           "text/plain" not in resp.headers.get("Content-Type", ""):
+        content_type = resp.headers.get("Content-Type", "")
+        if "text/csv" not in content_type and "text/plain" not in content_type:
+            # Check if we got HTML (redirect to login, etc.)
+            if "text/html" in content_type or "<html" in resp.text[:200].lower():
+                log.warning("Got HTML instead of CSV for %s [%s] — session may be expired",
+                            card_name, set_name)
+                return None
             log.warning("Unexpected content type for %s: %s",
-                        card_name, resp.headers.get("Content-Type"))
+                        card_name, content_type)
             return None
 
         safe_name = card_name.replace("/", "_").replace("\\", "_")

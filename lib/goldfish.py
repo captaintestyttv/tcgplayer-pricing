@@ -27,9 +27,6 @@ def parse_goldfish_csv(filepath: str) -> list[tuple[str, float]]:
     entries = []
     with open(filepath, newline="", encoding="utf-8") as f:
         reader = csv.reader(f)
-        header = next(reader, None)
-        if not header:
-            return entries
         for row in reader:
             if len(row) < 2:
                 continue
