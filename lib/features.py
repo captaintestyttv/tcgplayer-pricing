@@ -474,14 +474,28 @@ def enrich_with_accumulated_history(cards: dict) -> None:
     Merges the cache's price_history with any deeper history stored in Parquet.
     This gives training more sliding windows when history exceeds MTGJson's 90-day window.
     """
+    import os
+    from lib.config import PRICE_HISTORY_DIR
+    if not os.path.exists(PRICE_HISTORY_DIR):
+        return
+
     price_fields = [
         ("price_history", "normal"),
         ("foil_price_history", "foil"),
         ("buylist_price_history", "buylist"),
     ]
+
+    # Only check price types whose directories exist
+    active_fields = [
+        (field, ptype) for field, ptype in price_fields
+        if os.path.isdir(os.path.join(PRICE_HISTORY_DIR, ptype))
+    ]
+    if not active_fields:
+        return
+
     enriched = 0
     for card_id, card in ProgressBar.iter(cards.items(), "Enriching history", total=len(cards)):
-        for field, ptype in price_fields:
+        for field, ptype in active_fields:
             cache_prices = card.get(field, {})
             stored_prices = load_prices(card_id, price_type=ptype)
             if stored_prices:
@@ -507,6 +521,7 @@ def generate_training_data(cards: dict) -> list[dict]:
             sc = c.get("setCode", "")
             set_cards_map.setdefault(sc, []).append(float(ps[-1][1]))
     set_card_counts = {s: len(ps) for s, ps in set_cards_map.items()}
+    set_prices_sorted = {s: sorted(ps) for s, ps in set_cards_map.items()}
 
     with ProgressBar("Generating windows", total=len(cards)) as bar:
         for tcgplayer_id, card in cards.items():
@@ -553,11 +568,10 @@ def generate_training_data(cards: dict) -> list[dict]:
                     i, ref_date, card,
                 )
 
-                # Price percentile
-                if set_prices and window[0] > 0:
-                    wf["price_percentile"] = sum(
-                        1 for p in set_prices if p <= window[0]
-                    ) / len(set_prices)
+                # Price percentile (O(log n) via bisect)
+                sp_sorted = set_prices_sorted.get(set_code, [])
+                if sp_sorted and window[0] > 0:
+                    wf["price_percentile"] = bisect.bisect_right(sp_sorted, window[0]) / len(sp_sorted)
                 else:
                     wf["price_percentile"] = 0.5
 
