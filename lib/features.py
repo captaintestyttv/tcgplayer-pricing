@@ -8,6 +8,7 @@ from lib.config import (
     SPOILER_WINDOW_DAYS, RELEASE_PROXIMITY_MAX, get_logger,
 )
 from lib.price_store import load_prices, merge_price_dicts
+from lib.progress import ProgressBar, status
 
 log = get_logger(__name__)
 
@@ -82,12 +83,56 @@ def extract_features(tcgplayer_id: str, card: dict, reference_date: datetime | N
     else:
         price_range_30d = 0.0
 
-    days_since_last_change = 0
+    # Phase 7: price dynamics
+    if len(price_vals) >= 14 and price_vals[-14] > 0:
+        momentum_14d = (price_vals[-1] - price_vals[-14]) / max(price_vals[-14], MIN_PRICE)
+    else:
+        momentum_14d = 0.0
+
+    if len(price_vals) >= 14:
+        mom_now = (price_vals[-1] - price_vals[-7]) / max(price_vals[-7], MIN_PRICE)
+        mom_prev = (price_vals[-7] - price_vals[-14]) / max(price_vals[-14], MIN_PRICE)
+        price_acceleration_7d = mom_now - mom_prev
+    else:
+        price_acceleration_7d = 0.0
+
+    if price_vals:
+        peak = max(price_vals)
+        drawdown_from_peak = (peak - price_vals[-1]) / max(peak, MIN_PRICE)
+    else:
+        drawdown_from_peak = 0.0
+
     if len(price_vals) >= 2:
-        for j in range(len(price_vals) - 1, 0, -1):
-            if abs(price_vals[j] - price_vals[j - 1]) > 1e-6:
-                break
-            days_since_last_change += 1
+        lo, hi = min(price_vals), max(price_vals)
+        spread = hi - lo
+        price_relative_to_range = (price_vals[-1] - lo) / spread if spread > 1e-6 else 0.5
+    else:
+        price_relative_to_range = 0.5
+
+    if len(foil_vals) >= 7 and foil_vals[-7] > 0:
+        foil_momentum_7d = (foil_vals[-1] - foil_vals[-7]) / max(foil_vals[-7], MIN_PRICE)
+    else:
+        foil_momentum_7d = 0.0
+
+    if len(price_vals) >= 14:
+        window = price_vals[-30:] if len(price_vals) >= 30 else price_vals
+        y = np.array(window)
+        n = len(y)
+        x = np.arange(n, dtype=np.float64)
+        x_mean = (n - 1) / 2.0
+        y_mean = y.mean()
+        y_centered = y - y_mean
+        x_centered = x - x_mean
+        ss_tot = y_centered.dot(y_centered)
+        if ss_tot > 1e-12:
+            slope = x_centered.dot(y_centered) / x_centered.dot(x_centered)
+            residuals = y_centered - slope * x_centered
+            ss_res = residuals.dot(residuals)
+            trend_strength = max(0.0, float(1.0 - ss_res / ss_tot))
+        else:
+            trend_strength = 0.0
+    else:
+        trend_strength = 0.0
 
     set_card_count = card.get("set_card_count", 0)
     price_percentile = card.get("price_percentile", 0.5)
@@ -126,12 +171,104 @@ def extract_features(tcgplayer_id: str, card: dict, reference_date: datetime | N
         # Phase 5: set release signals (2 features)
         "set_release_proximity": set_release_proximity,
         "spoiler_season": spoiler_season,
-        # Phase 6: derived signals (4 features)
+        # Phase 6: derived signals (3 features)
         "price_range_30d": price_range_30d,
-        "days_since_last_price_change": days_since_last_change,
         "set_card_count": set_card_count,
         "price_percentile": price_percentile,
+        # Phase 7: price dynamics (6 features)
+        "momentum_14d": momentum_14d,
+        "price_acceleration_7d": price_acceleration_7d,
+        "drawdown_from_peak": drawdown_from_peak,
+        "price_relative_to_range": price_relative_to_range,
+        "foil_momentum_7d": foil_momentum_7d,
+        "trend_strength": trend_strength,
+        # Phase 8: spoiler synergy (3 features, computed post-hoc)
+        "spoiler_tribal_overlap": 0.0,
+        "spoiler_keyword_overlap": 0.0,
+        "spoiler_color_overlap": 0.0,
     }
+
+
+def compute_spoiler_synergy_features(
+    features_list: list[dict],
+    cards: dict,
+    reference_date: datetime | None = None,
+) -> None:
+    """Mutate feature dicts in-place to add spoiler synergy features.
+
+    Computes overlap between each card's subtypes/keywords/colors and cards
+    from sets releasing within RELEASE_PROXIMITY_MAX days of reference_date.
+    """
+    from datetime import timedelta
+
+    def _build_upcoming_index(ref_dt: datetime) -> tuple[dict, set, list, int]:
+        """Return (subtype_counts, keyword_set, color_sets, total_upcoming) for a ref date."""
+        subtype_counts: dict[str, int] = defaultdict(int)
+        keyword_set: set[str] = set()
+        color_sets: list[set] = []
+        for card in cards.values():
+            release_str = card.get("setReleaseDate", "")
+            if not release_str:
+                continue
+            try:
+                release_dt = datetime.fromisoformat(release_str)
+            except ValueError:
+                continue
+            if release_dt > ref_dt and (release_dt - ref_dt).days <= RELEASE_PROXIMITY_MAX:
+                for st in card.get("subtypes", []):
+                    subtype_counts[st] += 1
+                keyword_set.update(card.get("keywords", []))
+                ci = set(card.get("colorIdentity", []))
+                if ci:
+                    color_sets.append(ci)
+        return subtype_counts, keyword_set, color_sets, len(color_sets)
+
+    def _apply(feat: dict, card: dict, subtype_counts: dict, keyword_set: set,
+               color_sets: list, total_upcoming: int) -> None:
+        card_subtypes = card.get("subtypes", [])
+        if card_subtypes and subtype_counts:
+            feat["spoiler_tribal_overlap"] = float(max(
+                subtype_counts.get(st, 0) for st in card_subtypes
+            ))
+        else:
+            feat["spoiler_tribal_overlap"] = 0.0
+
+        card_keywords = set(card.get("keywords", []))
+        feat["spoiler_keyword_overlap"] = float(len(card_keywords & keyword_set))
+
+        card_colors = set(card.get("colorIdentity", []))
+        if card_colors and total_upcoming > 0:
+            shared = sum(1 for cs in color_sets if card_colors & cs)
+            feat["spoiler_color_overlap"] = shared / total_upcoming
+        else:
+            feat["spoiler_color_overlap"] = 0.0
+
+    if reference_date is not None:
+        # Live scoring: single reference date for all rows
+        idx = _build_upcoming_index(reference_date)
+        for feat in features_list:
+            card = cards.get(feat["tcgplayer_id"], {})
+            _apply(feat, card, *idx)
+    else:
+        # Training path: group by per-row _reference_date
+        by_date: dict[str, list[dict]] = defaultdict(list)
+        for feat in features_list:
+            rd = feat.get("_reference_date", "")
+            by_date[rd].append(feat)
+
+        for date_str, feats in by_date.items():
+            if date_str:
+                ref_dt = datetime.fromisoformat(date_str)
+            else:
+                ref_dt = datetime.now()
+            idx = _build_upcoming_index(ref_dt)
+            for feat in feats:
+                card = cards.get(feat["tcgplayer_id"], {})
+                _apply(feat, card, *idx)
+
+    # Clean up temporary keys
+    for feat in features_list:
+        feat.pop("_reference_date", None)
 
 
 def compute_cluster_features(features_list: list[dict], cards: dict) -> None:
@@ -167,7 +304,7 @@ def enrich_with_accumulated_history(cards: dict) -> None:
         ("buylist_price_history", "buylist"),
     ]
     enriched = 0
-    for card_id, card in cards.items():
+    for card_id, card in ProgressBar.iter(cards.items(), "Enriching history", total=len(cards)):
         for field, ptype in price_fields:
             cache_prices = card.get(field, {})
             stored_prices = load_prices(card_id, price_type=ptype)
@@ -177,7 +314,7 @@ def enrich_with_accumulated_history(cards: dict) -> None:
                     card[field] = merged
                     enriched += 1
     if enriched:
-        log.info("Enriched %d price histories from Parquet store", enriched)
+        status(f"Enriched {enriched} price histories from Parquet store")
 
 
 def generate_training_data(cards: dict) -> list[dict]:
@@ -197,46 +334,55 @@ def generate_training_data(cards: dict) -> list[dict]:
 
     set_card_counts = {s: len(ps) for s, ps in set_cards_map.items()}
 
-    for tcgplayer_id, card in cards.items():
-        prices = sorted(card.get("price_history", {}).items())
-        price_vals = [float(v) for _, v in prices]
+    with ProgressBar("Generating windows", total=len(cards)) as bar:
+        for tcgplayer_id, card in cards.items():
+            prices = sorted(card.get("price_history", {}).items())
+            price_vals = [float(v) for _, v in prices]
 
-        if len(price_vals) < 31:
-            log.debug("Skipping %s: only %d days of history", tcgplayer_id, len(price_vals))
-            continue
+            if len(price_vals) < 31:
+                log.debug("Skipping %s: only %d days of history", tcgplayer_id, len(price_vals))
+                bar.advance()
+                continue
 
-        foil = sorted(card.get("foil_price_history", {}).items())
-        buylist = sorted(card.get("buylist_price_history", {}).items())
+            foil = sorted(card.get("foil_price_history", {}).items())
+            buylist = sorted(card.get("buylist_price_history", {}).items())
 
-        for i in range(len(price_vals) - 30):
-            window = price_vals[i : i + 31]
-            spike = int(
-                window[0] >= SPIKE_MIN_PRICE
-                and (max(window[1:]) - window[0]) / window[0] > SPIKE_THRESHOLD
-            )
-            snapshot = dict(card)
-            snapshot["price_history"] = dict(prices[:i+1])
+            for i in range(len(price_vals) - 30):
+                window = price_vals[i : i + 31]
+                spike = int(
+                    window[0] >= SPIKE_MIN_PRICE
+                    and (max(window[1:]) - window[0]) / window[0] > SPIKE_THRESHOLD
+                )
+                snapshot = dict(card)
+                snapshot["price_history"] = dict(prices[:i+1])
 
-            cutoff_date = prices[i][0]
-            snapshot["foil_price_history"] = {d: v for d, v in foil if d <= cutoff_date}
-            snapshot["buylist_price_history"] = {d: v for d, v in buylist if d <= cutoff_date}
+                cutoff_date = prices[i][0]
+                snapshot["foil_price_history"] = {d: v for d, v in foil if d <= cutoff_date}
+                snapshot["buylist_price_history"] = {d: v for d, v in buylist if d <= cutoff_date}
 
-            set_code = card.get("setCode", "")
-            snapshot["set_card_count"] = set_card_counts.get(set_code, 0)
-            set_prices = set_cards_map.get(set_code, [])
-            if set_prices and window[0] > 0:
-                snapshot["price_percentile"] = sum(
-                    1 for p in set_prices if p <= window[0]
-                ) / len(set_prices)
-            else:
-                snapshot["price_percentile"] = 0.5
+                set_code = card.get("setCode", "")
+                snapshot["set_card_count"] = set_card_counts.get(set_code, 0)
+                set_prices = set_cards_map.get(set_code, [])
+                if set_prices and window[0] > 0:
+                    snapshot["price_percentile"] = sum(
+                        1 for p in set_prices if p <= window[0]
+                    ) / len(set_prices)
+                else:
+                    snapshot["price_percentile"] = 0.5
 
-            ref_date = datetime.fromisoformat(cutoff_date)
-            feat = extract_features(tcgplayer_id, snapshot, reference_date=ref_date)
-            feat["spike"] = spike
-            rows.append(feat)
+                ref_date = datetime.fromisoformat(cutoff_date)
+                feat = extract_features(tcgplayer_id, snapshot, reference_date=ref_date)
+                feat["spike"] = spike
+                feat["_reference_date"] = cutoff_date
+                rows.append(feat)
 
+            bar.advance()
+
+    status(f"Computing cluster features for {len(rows)} rows...")
     compute_cluster_features(rows, cards)
 
-    log.info("Generated %d training rows from %d cards", len(rows), len(cards))
+    status(f"Computing spoiler synergy features for {len(rows)} rows...")
+    compute_spoiler_synergy_features(rows, cards)
+
+    status(f"Generated {len(rows):,} training rows from {len(cards):,} cards")
     return rows
