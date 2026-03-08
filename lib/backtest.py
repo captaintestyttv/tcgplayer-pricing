@@ -35,11 +35,17 @@ def run_backtest(
     if not rows:
         raise ValueError("No training data generated. Insufficient price history.")
 
-    # Score all rows
-    probabilities = score(rows, model_path)
+    # Use last 20% of rows as holdout set (later windows per card)
+    holdout_start = int(len(rows) * 0.8)
+    test_rows = rows[holdout_start:]
+    if not test_rows:
+        raise ValueError("Not enough data for holdout evaluation.")
+
+    # Score holdout rows only
+    probabilities = score(test_rows, model_path)
 
     # Compute metrics
-    actuals = [r["spike"] for r in rows]
+    actuals = [r["spike"] for r in test_rows]
     predicted = [1 if p >= SPIKE_HOLD_THRESHOLD else 0 for p in probabilities]
 
     tp = sum(1 for a, p in zip(actuals, predicted) if a == 1 and p == 1)
@@ -73,7 +79,7 @@ def run_backtest(
     results = {
         "timestamp": datetime.now().isoformat(),
         "model_trained_at": meta.get("trained_at", "unknown") if meta else "unknown",
-        "total_samples": len(rows),
+        "total_samples": len(test_rows),
         "spike_count": sum(actuals),
         "spike_rate": round(sum(actuals) / max(len(actuals), 1), 4),
         "threshold": SPIKE_HOLD_THRESHOLD,
@@ -93,8 +99,8 @@ def run_backtest(
         json.dump(results, f, indent=2)
 
     # Print summary
-    print(f"\n--- Backtest Results ---")
-    print(f"Samples: {results['total_samples']} ({results['spike_count']} spikes, rate={results['spike_rate']:.1%})")
+    print(f"\n--- Backtest Results (20% holdout) ---")
+    print(f"Total rows: {len(rows)}, Holdout: {len(test_rows)} ({results['spike_count']} spikes, rate={results['spike_rate']:.1%})")
     print(f"Threshold: {SPIKE_HOLD_THRESHOLD}")
     print(f"Confusion: TP={tp} FP={fp} FN={fn} TN={tn}")
     print(f"Accuracy:  {accuracy:.3f}")

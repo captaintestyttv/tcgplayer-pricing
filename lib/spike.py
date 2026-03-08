@@ -10,8 +10,10 @@ from sklearn.metrics import accuracy_score, roc_auc_score, precision_score, reca
 
 from lib.config import (
     N_ESTIMATORS, MAX_DEPTH, LEARNING_RATE, VALIDATION_SPLIT, RANDOM_SEED,
-    SAMPLE_WEIGHT_FEATURE, get_logger,
+    SAMPLE_WEIGHT_FEATURE, MIN_CHILD_WEIGHT, REG_ALPHA, REG_LAMBDA,
+    SUBSAMPLE, COLSAMPLE_BYTREE, get_logger,
 )
+from lib.progress import ProgressBar, status
 
 log = get_logger(__name__)
 
@@ -34,23 +36,24 @@ FEATURE_COLS = [
     "keyword_count",
     "mana_value",
     "subtype_count",
-    # Phase 2: foil & buylist
+    # Phase 2: foil
     "foil_to_normal_ratio",
-    "buylist_ratio",
-    "buylist_momentum_7d",
     # Phase 3: cluster
     "cluster_momentum_7d",
-    # Phase 4: change detection
-    "recently_reprinted",
-    "legality_changed",
     # Phase 5: set release signals
     "set_release_proximity",
     "spoiler_season",
     # Phase 6: derived signals
     "price_range_30d",
-    "days_since_last_price_change",
     "set_card_count",
-    "price_percentile",
+    # Phase 7: price dynamics
+    "drawdown_from_peak",
+    "foil_momentum_7d",
+    "trend_strength",
+    # Phase 8: spoiler synergy
+    "spoiler_tribal_overlap",
+    "spoiler_keyword_overlap",
+    "spoiler_color_overlap",
 ]
 
 
@@ -72,9 +75,12 @@ def train(rows: list[dict], model_path: str, device: str = "cpu") -> None:
     n_neg = len(y) - n_pos
     spw = n_neg / max(n_pos, 1)
 
+    status(f"Training data: {len(rows):,} samples, {n_pos:,} spikes ({n_pos/len(rows)*100:.1f}%), device={device}")
+
     # Validation split for metrics (stratified to preserve spike ratio)
     val_metrics = {}
     if len(y) >= 20 and n_pos >= 2:
+        status("Running validation split (80/20 stratified)...")
         sss = StratifiedShuffleSplit(n_splits=1, test_size=VALIDATION_SPLIT,
                                      random_state=RANDOM_SEED)
         train_idx, val_idx = next(sss.split(X, y))
@@ -87,6 +93,11 @@ def train(rows: list[dict], model_path: str, device: str = "cpu") -> None:
             max_depth=MAX_DEPTH,
             learning_rate=LEARNING_RATE,
             scale_pos_weight=spw,
+            min_child_weight=MIN_CHILD_WEIGHT,
+            reg_alpha=REG_ALPHA,
+            reg_lambda=REG_LAMBDA,
+            subsample=SUBSAMPLE,
+            colsample_bytree=COLSAMPLE_BYTREE,
             eval_metric="logloss",
             verbosity=0,
         )
@@ -103,12 +114,18 @@ def train(rows: list[dict], model_path: str, device: str = "cpu") -> None:
         }
 
     # Train final model on full data
+    status(f"Training XGBoost ({N_ESTIMATORS} estimators, depth={MAX_DEPTH})...")
     model = xgb.XGBClassifier(
         device=device,
         n_estimators=N_ESTIMATORS,
         max_depth=MAX_DEPTH,
         learning_rate=LEARNING_RATE,
         scale_pos_weight=spw,
+        min_child_weight=MIN_CHILD_WEIGHT,
+        reg_alpha=REG_ALPHA,
+        reg_lambda=REG_LAMBDA,
+        subsample=SUBSAMPLE,
+        colsample_bytree=COLSAMPLE_BYTREE,
         eval_metric="logloss",
         verbosity=0,
     )
@@ -129,6 +146,11 @@ def train(rows: list[dict], model_path: str, device: str = "cpu") -> None:
             "max_depth": MAX_DEPTH,
             "learning_rate": LEARNING_RATE,
             "scale_pos_weight": round(spw, 4),
+            "min_child_weight": MIN_CHILD_WEIGHT,
+            "reg_alpha": REG_ALPHA,
+            "reg_lambda": REG_LAMBDA,
+            "subsample": SUBSAMPLE,
+            "colsample_bytree": COLSAMPLE_BYTREE,
         },
         "sample_weighting": "sqrt_current_price",
         "spike_rate": float(y.mean()),
@@ -140,20 +162,22 @@ def train(rows: list[dict], model_path: str, device: str = "cpu") -> None:
     with open(meta_path, "w") as f:
         json.dump(meta, f, indent=2)
 
+    status(f"Model saved: {os.path.basename(model_path)}")
+    if top3:
+        status(f"Top features: {', '.join(f'{k} ({v:.3f})' for k, v in top3)}")
+    if val_metrics:
+        auc_str = f"{val_metrics['val_auc']:.3f}" if val_metrics["val_auc"] is not None else "N/A"
+        status(
+            f"Validation: accuracy={val_metrics['val_accuracy']:.3f}  "
+            f"AUC={auc_str}  "
+            f"precision={val_metrics['val_precision']:.3f}  "
+            f"recall={val_metrics['val_recall']:.3f}"
+        )
+
     log.info(
         "Model saved to %s (%d samples, device=%s, spike_rate=%.3f)",
         model_path, len(rows), device, meta["spike_rate"],
     )
-    if top3:
-        log.info("Top features: %s", ", ".join(f"{k}={v:.3f}" for k, v in top3))
-    if val_metrics:
-        log.info(
-            "Validation: accuracy=%.3f auc=%s precision=%.3f recall=%.3f",
-            val_metrics["val_accuracy"],
-            f"{val_metrics['val_auc']:.3f}" if val_metrics["val_auc"] is not None else "N/A",
-            val_metrics["val_precision"],
-            val_metrics["val_recall"],
-        )
 
 
 def load_model_meta(model_path: str) -> dict | None:

@@ -32,8 +32,6 @@ def _extract_card_metadata(tcgplayer_id: str, card: dict) -> dict:
         "keyword_count": len(card.get("keywords", [])),
         "mana_value": float(card.get("manaValue", 0) or 0),
         "subtype_count": len(card.get("subtypes", [])),
-        "recently_reprinted": int(card.get("recently_reprinted", 0)),
-        "legality_changed": int(card.get("legality_changed", 0)),
         # Post-hoc features (defaults, computed later)
         "cluster_momentum_7d": 0.0,
         "spoiler_tribal_overlap": 0.0,
@@ -95,22 +93,11 @@ def _extract_window_features(
     )
 
     fv = foil_vals
-    bv = buylist_vals
 
     if fv and current_price > 0:
         foil_to_normal_ratio = fv[-1] / current_price
     else:
         foil_to_normal_ratio = 0.0
-
-    if bv and current_price > 0:
-        buylist_ratio = bv[-1] / current_price
-    else:
-        buylist_ratio = 0.0
-
-    if len(bv) >= 7 and bv[-7] > 0:
-        buylist_momentum_7d = (bv[-1] - bv[-7]) / max(bv[-7], MIN_PRICE)
-    else:
-        buylist_momentum_7d = 0.0
 
     if len(pv) >= 2:
         last_30 = pv[-30:]
@@ -119,30 +106,11 @@ def _extract_window_features(
     else:
         price_range_30d = 0.0
 
-    if len(pv) >= 14 and pv[-14] > 0:
-        momentum_14d = (pv[-1] - pv[-14]) / max(pv[-14], MIN_PRICE)
-    else:
-        momentum_14d = 0.0
-
-    if len(pv) >= 14:
-        mom_now = (pv[-1] - pv[-7]) / max(pv[-7], MIN_PRICE)
-        mom_prev = (pv[-7] - pv[-14]) / max(pv[-14], MIN_PRICE)
-        price_acceleration_7d = mom_now - mom_prev
-    else:
-        price_acceleration_7d = 0.0
-
     if pv:
         peak = max(pv)
         drawdown_from_peak = (peak - pv[-1]) / max(peak, MIN_PRICE)
     else:
         drawdown_from_peak = 0.0
-
-    if len(pv) >= 2:
-        lo, hi = min(pv), max(pv)
-        spread = hi - lo
-        price_relative_to_range = (pv[-1] - lo) / spread if spread > 1e-6 else 0.5
-    else:
-        price_relative_to_range = 0.5
 
     if len(fv) >= 7 and fv[-7] > 0:
         foil_momentum_7d = (fv[-1] - fv[-7]) / max(fv[-7], MIN_PRICE)
@@ -177,13 +145,8 @@ def _extract_window_features(
         "set_release_proximity": set_release_proximity,
         "spoiler_season": spoiler_season,
         "foil_to_normal_ratio": foil_to_normal_ratio,
-        "buylist_ratio": buylist_ratio,
-        "buylist_momentum_7d": buylist_momentum_7d,
         "price_range_30d": price_range_30d,
-        "momentum_14d": momentum_14d,
-        "price_acceleration_7d": price_acceleration_7d,
         "drawdown_from_peak": drawdown_from_peak,
-        "price_relative_to_range": price_relative_to_range,
         "foil_momentum_7d": foil_momentum_7d,
         "trend_strength": trend_strength,
     }
@@ -237,18 +200,6 @@ def extract_features(tcgplayer_id: str, card: dict, reference_date: datetime | N
     else:
         foil_to_normal_ratio = 0.0
 
-    buylist_prices = card.get("buylist_price_history", {})
-    buylist_vals = [float(v) for _, v in sorted(buylist_prices.items())]
-    if buylist_vals and current_price > 0:
-        buylist_ratio = buylist_vals[-1] / current_price
-    else:
-        buylist_ratio = 0.0
-
-    if len(buylist_vals) >= 7 and buylist_vals[-7] > 0:
-        buylist_momentum_7d = (buylist_vals[-1] - buylist_vals[-7]) / max(buylist_vals[-7], MIN_PRICE)
-    else:
-        buylist_momentum_7d = 0.0
-
     edhrec_rank = card.get("edhrecRank")
 
     # Phase 6: derived price signals
@@ -260,30 +211,11 @@ def extract_features(tcgplayer_id: str, card: dict, reference_date: datetime | N
         price_range_30d = 0.0
 
     # Phase 7: price dynamics
-    if len(price_vals) >= 14 and price_vals[-14] > 0:
-        momentum_14d = (price_vals[-1] - price_vals[-14]) / max(price_vals[-14], MIN_PRICE)
-    else:
-        momentum_14d = 0.0
-
-    if len(price_vals) >= 14:
-        mom_now = (price_vals[-1] - price_vals[-7]) / max(price_vals[-7], MIN_PRICE)
-        mom_prev = (price_vals[-7] - price_vals[-14]) / max(price_vals[-14], MIN_PRICE)
-        price_acceleration_7d = mom_now - mom_prev
-    else:
-        price_acceleration_7d = 0.0
-
     if price_vals:
         peak = max(price_vals)
         drawdown_from_peak = (peak - price_vals[-1]) / max(peak, MIN_PRICE)
     else:
         drawdown_from_peak = 0.0
-
-    if len(price_vals) >= 2:
-        lo, hi = min(price_vals), max(price_vals)
-        spread = hi - lo
-        price_relative_to_range = (price_vals[-1] - lo) / spread if spread > 1e-6 else 0.5
-    else:
-        price_relative_to_range = 0.5
 
     if len(foil_vals) >= 7 and foil_vals[-7] > 0:
         foil_momentum_7d = (foil_vals[-1] - foil_vals[-7]) / max(foil_vals[-7], MIN_PRICE)
@@ -311,7 +243,6 @@ def extract_features(tcgplayer_id: str, card: dict, reference_date: datetime | N
         trend_strength = 0.0
 
     set_card_count = card.get("set_card_count", 0)
-    price_percentile = card.get("price_percentile", 0.5)
 
     return {
         "tcgplayer_id": tcgplayer_id,
@@ -335,27 +266,18 @@ def extract_features(tcgplayer_id: str, card: dict, reference_date: datetime | N
         "keyword_count": len(card.get("keywords", [])),
         "mana_value": float(card.get("manaValue", 0) or 0),
         "subtype_count": len(card.get("subtypes", [])),
-        # Phase 2: foil & buylist (3 features)
+        # Phase 2: foil
         "foil_to_normal_ratio": foil_to_normal_ratio,
-        "buylist_ratio": buylist_ratio,
-        "buylist_momentum_7d": buylist_momentum_7d,
         # Phase 3: cluster (1 feature, computed post-hoc)
         "cluster_momentum_7d": 0.0,
-        # Phase 4: change detection (2 features)
-        "recently_reprinted": int(card.get("recently_reprinted", 0)),
-        "legality_changed": int(card.get("legality_changed", 0)),
         # Phase 5: set release signals (2 features)
         "set_release_proximity": set_release_proximity,
         "spoiler_season": spoiler_season,
-        # Phase 6: derived signals (3 features)
+        # Phase 6: derived signals
         "price_range_30d": price_range_30d,
         "set_card_count": set_card_count,
-        "price_percentile": price_percentile,
-        # Phase 7: price dynamics (6 features)
-        "momentum_14d": momentum_14d,
-        "price_acceleration_7d": price_acceleration_7d,
+        # Phase 7: price dynamics
         "drawdown_from_peak": drawdown_from_peak,
-        "price_relative_to_range": price_relative_to_range,
         "foil_momentum_7d": foil_momentum_7d,
         "trend_strength": trend_strength,
         # Phase 8: spoiler synergy (3 features, computed post-hoc)
@@ -521,7 +443,6 @@ def generate_training_data(cards: dict) -> list[dict]:
             sc = c.get("setCode", "")
             set_cards_map.setdefault(sc, []).append(float(ps[-1][1]))
     set_card_counts = {s: len(ps) for s, ps in set_cards_map.items()}
-    set_prices_sorted = {s: sorted(ps) for s, ps in set_cards_map.items()}
 
     with ProgressBar("Generating windows", total=len(cards)) as bar:
         for tcgplayer_id, card in cards.items():
@@ -546,7 +467,6 @@ def generate_training_data(cards: dict) -> list[dict]:
 
             set_code = card.get("setCode", "")
             meta["set_card_count"] = set_card_counts.get(set_code, 0)
-            set_prices = set_cards_map.get(set_code, [])
 
             for i in range(len(price_vals) - 30):
                 window = price_vals[i : i + 31]
@@ -567,13 +487,6 @@ def generate_training_data(cards: dict) -> list[dict]:
                     foil_vals[:foil_end], buylist_vals[:buy_end],
                     i, ref_date, card,
                 )
-
-                # Price percentile (O(log n) via bisect)
-                sp_sorted = set_prices_sorted.get(set_code, [])
-                if sp_sorted and window[0] > 0:
-                    wf["price_percentile"] = bisect.bisect_right(sp_sorted, window[0]) / len(sp_sorted)
-                else:
-                    wf["price_percentile"] = 0.5
 
                 # Merge: metadata (constant) + window features (variable)
                 feat = {**meta, **wf}

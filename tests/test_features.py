@@ -21,19 +21,16 @@ def test_extract_features_keys(cards):
         "is_legendary", "is_creature", "color_count", "keyword_count",
         "mana_value", "subtype_count",
         # Phase 2
-        "foil_to_normal_ratio", "buylist_ratio", "buylist_momentum_7d",
+        "foil_to_normal_ratio",
         # Phase 3
         "cluster_momentum_7d",
-        # Phase 4
-        "recently_reprinted", "legality_changed",
         # Phase 5
         "set_release_proximity", "spoiler_season",
         # Phase 6: derived signals
         "price_range_30d",
-        "set_card_count", "price_percentile",
+        "set_card_count",
         # Phase 7: price dynamics
-        "momentum_14d", "price_acceleration_7d", "drawdown_from_peak",
-        "price_relative_to_range", "foil_momentum_7d", "trend_strength",
+        "drawdown_from_peak", "foil_momentum_7d", "trend_strength",
         # Phase 8: spoiler synergy
         "spoiler_tribal_overlap", "spoiler_keyword_overlap", "spoiler_color_overlap",
     }
@@ -92,18 +89,12 @@ def test_extract_features_empty_price_history():
     assert feat["subtype_count"] == 0
     # Phase 2 defaults
     assert feat["foil_to_normal_ratio"] == 0.0
-    assert feat["buylist_ratio"] == 0.0
-    assert feat["buylist_momentum_7d"] == 0.0
-    # Phase 4 defaults
-    assert feat["recently_reprinted"] == 0
-    assert feat["legality_changed"] == 0
     # Phase 5 defaults
     assert feat["set_release_proximity"] == 90  # RELEASE_PROXIMITY_MAX
     assert feat["spoiler_season"] == 0
     # Phase 6 defaults
     assert feat["price_range_30d"] == 0.0
     assert feat["set_card_count"] == 0
-    assert feat["price_percentile"] == pytest.approx(0.5)
     # Phase 8 defaults
     assert feat["spoiler_tribal_overlap"] == 0.0
     assert feat["spoiler_keyword_overlap"] == 0.0
@@ -158,17 +149,11 @@ def test_foil_buylist_features(cards):
     feat = extract_features("111111", cards["111111"])
     # foil_to_normal_ratio: 3.85 / 1.91
     assert feat["foil_to_normal_ratio"] == pytest.approx(3.85 / 1.91, rel=1e-3)
-    # buylist_ratio: 0.80 / 1.91
-    assert feat["buylist_ratio"] == pytest.approx(0.80 / 1.91, rel=1e-3)
-    # buylist_momentum_7d: (0.80 - 0.73) / 0.73
-    assert feat["buylist_momentum_7d"] == pytest.approx((0.80 - 0.73) / 0.73, rel=1e-3)
 
 
 def test_foil_buylist_defaults_no_data(cards):
     feat = extract_features("222222", cards["222222"])
     assert feat["foil_to_normal_ratio"] == 0.0
-    assert feat["buylist_ratio"] == 0.0
-    assert feat["buylist_momentum_7d"] == 0.0
 
 
 # Phase 3 tests
@@ -296,40 +281,7 @@ def test_set_card_count(cards):
     assert isinstance(feat["set_card_count"], int)
 
 
-def test_price_percentile_requires_context():
-    """Without set context, price_percentile defaults to 0.5."""
-    card = {
-        "rarity": "rare", "printings": ["A"], "legalities": {},
-        "price_history": {"2026-01-01": 5.0},
-    }
-    feat = extract_features("1", card)
-    assert feat["price_percentile"] == pytest.approx(0.5)
-
-
 # Phase 7 tests
-def test_momentum_14d():
-    history = {f"2026-01-{i:02d}": float(i) for i in range(1, 18)}
-    card = {"rarity": "rare", "printings": [], "legalities": {}, "price_history": history}
-    feat = extract_features("1", card)
-    # 17 days of data, price goes 1..17, momentum_14d = (17 - 4) / 4 = 3.25
-    assert feat["momentum_14d"] == pytest.approx((17 - 4) / 4)
-
-
-def test_momentum_14d_insufficient_data():
-    history = {f"2026-01-{i:02d}": float(i) for i in range(1, 10)}
-    card = {"rarity": "rare", "printings": [], "legalities": {}, "price_history": history}
-    feat = extract_features("1", card)
-    assert feat["momentum_14d"] == 0.0
-
-
-def test_price_acceleration_7d():
-    # Rising then flat: acceleration should be negative
-    history = {f"2026-01-{i:02d}": float(min(i, 10)) for i in range(1, 18)}
-    card = {"rarity": "rare", "printings": [], "legalities": {}, "price_history": history}
-    feat = extract_features("1", card)
-    assert feat["price_acceleration_7d"] < 0  # decelerating
-
-
 def test_drawdown_from_peak():
     history = {f"2026-01-{i:02d}": (10.0 if i <= 5 else 5.0) for i in range(1, 18)}
     card = {"rarity": "rare", "printings": [], "legalities": {}, "price_history": history}
@@ -342,21 +294,6 @@ def test_drawdown_from_peak_at_peak():
     card = {"rarity": "rare", "printings": [], "legalities": {}, "price_history": history}
     feat = extract_features("1", card)
     assert feat["drawdown_from_peak"] == pytest.approx(0.0)
-
-
-def test_price_relative_to_range():
-    # Price at bottom of range
-    history = {f"2026-01-{i:02d}": (10.0 if i <= 5 else 1.0) for i in range(1, 18)}
-    card = {"rarity": "rare", "printings": [], "legalities": {}, "price_history": history}
-    feat = extract_features("1", card)
-    assert feat["price_relative_to_range"] == pytest.approx(0.0)
-
-
-def test_price_relative_to_range_flat():
-    history = {f"2026-01-{i:02d}": 5.0 for i in range(1, 18)}
-    card = {"rarity": "rare", "printings": [], "legalities": {}, "price_history": history}
-    feat = extract_features("1", card)
-    assert feat["price_relative_to_range"] == pytest.approx(0.5)  # flat -> 0.5
 
 
 def test_foil_momentum_7d():
@@ -394,10 +331,7 @@ def test_trend_strength_insufficient_data():
 def test_empty_history_phase7_defaults():
     card = {"rarity": "common", "printings": [], "legalities": {}, "price_history": {}}
     feat = extract_features("0", card)
-    assert feat["momentum_14d"] == 0.0
-    assert feat["price_acceleration_7d"] == 0.0
     assert feat["drawdown_from_peak"] == 0.0
-    assert feat["price_relative_to_range"] == 0.5
     assert feat["foil_momentum_7d"] == 0.0
     assert feat["trend_strength"] == 0.0
 
